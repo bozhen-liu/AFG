@@ -2,5 +2,6 @@ info.txt
 console.txt
 output.txt
 build/
+rust_monitor/target/
 examples/demo/target/
 run.sh

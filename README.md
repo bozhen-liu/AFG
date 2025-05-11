@@ -2,7 +2,7 @@
 
 This is the first automated framework to integrate the detections of data leaks and access control policy defects into systematic testing for multi-threaded and event-driven programs.
 
-## how to build 
+## how to build static taint analysis
 ```bash
 mkdir build
 cd build
@@ -35,6 +35,10 @@ opt -load-pass-plugin build/libPointerAnalysisPass.so \
 ## how to switch rust toolchain (for examples)
 ```bash
 rustup toolchain list
-rustup default stable
+rustup default stable # we use 1.68
 rustc --version
 ```
+
+
+## rust_monitor
+see `rust_monitor`
