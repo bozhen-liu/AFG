@@ -2,6 +2,13 @@
 
 This is the first automated framework to integrate the detections of data leaks and access control policy defects into systematic testing for multi-threaded and event-driven programs.
 
+## pre-requisite
+install the following compatible versions for this project
+- `llvm 17.0.6` 
+- `rustc 1.84.1 (e71f9a9a9 2025-01-27)`
+- `cmake 3.20.0`
+
+
 ## how to build static taint analysis
 ```bash
 mkdir build
