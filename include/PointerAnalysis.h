@@ -31,6 +31,10 @@ namespace llvm
         void analyze(Module &M);
         const PointsToMapTy &getPointsToMap() const;
         const CallGraphTy &getCallGraph() const { return CallGraph; }
+        const std::unordered_map<Value *, std::unordered_set<Value *>> getTaintedObjectToPointersMap() const
+        {
+            return TaintedObjectToPointersMap;
+        }
 
         const std::unordered_set<Function *> &getVisitedFunctions() const
         {

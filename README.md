@@ -9,7 +9,7 @@ install the following compatible versions for this project
 - `cmake 3.20.0`
 
 
-## how to build static taint analysis
+## how to build static taint pointer analysis
 ```bash
 mkdir build
 cd build
@@ -47,5 +47,5 @@ rustc --version
 ```
 
 
-## rust_monitor
-see `rust_monitor`
+## rust_monitor: dynamic refinement
+see [our forked madsim](https://github.com/bozhen-liu/madsim)

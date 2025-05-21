@@ -20,11 +20,60 @@ void PointerAnalysis::analyze(Module &M)
         processVtable(GV);
     }
 
-    Function *mainFn = M.getFunction("_ZN4demo4main17h3a2356faed25125dE");
-    // TODO: locate the real main through M.getFunction("main");
+    // define i32 @main(i32 %0, ptr %1) unnamed_addr #12 {
+    //     top:
+    //       %2 = load volatile i8, ptr @__rustc_debug_gdb_scripts_section__, align 1
+    //       %3 = sext i32 %0 to i64
+    //     ; call std::rt::lang_start
+    //       %4 = call i64 @_ZN3std2rt10lang_start17hda86b26a070ba0d9E(ptr @_ZN4demo4main17h88923f3d44c29843E, i64 %3, ptr %1, i8 0)
+    //       %5 = trunc i64 %4 to i32
+    //       ret i32 %5
+    //     }
+
+    Function *mainFn = M.getFunction("main");
     if (!mainFn || mainFn->isDeclaration())
     {
         errs() << "No main function found or it's only declared.\n";
+        return;
+    }
+
+    // locate the real main through M.getFunction("main");
+    Function *realMainFn = nullptr;
+    // Get the first basic block of mainFn
+    BasicBlock &firstBB = mainFn->front();
+    // Use an iterator to access the 3rd instruction
+    auto it = firstBB.begin();
+    std::advance(it, 2); // Move the iterator to the 3rd instruction (0-based index)
+
+    Instruction &thirdInst = *it;
+    errs() << "3rd instruction in the first basic block: " << thirdInst << "\n";
+    if (auto *callInst = dyn_cast<CallInst>(&thirdInst))
+    {
+        // The first argument to lang_start is the real main function
+        if (callInst->arg_size() > 0)
+        {
+            if (auto *realMain = dyn_cast<Function>(callInst->getArgOperand(0)))
+            {
+                realMainFn = realMain;
+            }
+            else
+            {
+                errs() << "The first argument is not a function.\n";
+            }
+        }
+        else
+        {
+            errs() << "No arguments found for the call instruction.\n";
+        }
+    }
+    else
+    {
+        errs() << "3rd instruction is not a CallInst.\n";
+    }
+
+    if (realMainFn)
+    {
+        errs() << "No real main function found.\n";
         return;
     }
 
@@ -649,20 +698,6 @@ void PointerAnalysis::getPtrsPTSIncludeTaintedObjects()
                 // Add the pointer to the result map under the tainted object
                 TaintedObjectToPointersMap[target].insert(ptr);
             }
-        }
-    }
-
-    // Print the entire result map
-    errs() << "\nTainted Object to Pointers Map:\n";
-    for (const auto &entry : TaintedObjectToPointersMap)
-    {
-        Value *taintedObject = entry.first;
-        const auto &pointers = entry.second;
-
-        errs() << "Tainted Object: " << *taintedObject << "\n";
-        for (Value *pointer : pointers)
-        {
-            errs() << "  -> Points from: " << *pointer << "\n";
         }
     }
 }

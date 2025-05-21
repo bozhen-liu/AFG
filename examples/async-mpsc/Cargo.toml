@@ -1,0 +1,16 @@
+[package]
+name = "async-demo"
+version = "0.1.0"
+edition = "2021"
+
+# Use the local path to madsim crate
+[dependencies]
+madsim-tokio = { path = "/home/ubuntu/madsim/madsim-tokio", features = ["full"] }
+madsim-macros = { path = "/home/ubuntu/madsim/madsim-macros" }
+
+[dependencies.madsim]
+path = "/home/ubuntu/madsim/madsim" 
+
+[features]
+sim = []
+

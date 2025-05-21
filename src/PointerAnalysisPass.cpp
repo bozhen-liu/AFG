@@ -49,8 +49,8 @@ namespace
 
                 // Iterate through the points-to map and print the results
                 outFile << "\n\n\n\nPointer Analysis Results:\n";
-                const auto &map = PA.getPointsToMap();
-                for (const auto &entry : map)
+                const auto &ptm = PA.getPointsToMap();
+                for (const auto &entry : ptm)
                 {
                     std::string pointerStr;
                     llvm::raw_string_ostream pointerStream(pointerStr);
@@ -75,6 +75,35 @@ namespace
                         outFile << "  -> " << targetStr << "\n";
                     }
                 }
+
+                // Print the taint result map
+                outFile << "\n\n\n\nTainted Object to Pointers Map:\n";
+                const auto &taint_map = PA.getTaintedObjectToPointersMap();
+                for (const auto &entry : taint_map)
+                {
+                    Value *taintedObject = entry.first;
+                    const auto &pointers = entry.second;
+
+                    outFile << "Tainted Object: ";
+                    {
+                        std::string taintedObjectStr;
+                        llvm::raw_string_ostream rso(taintedObjectStr);
+                        taintedObject->print(rso);
+                        rso.flush();
+                        outFile << taintedObjectStr << "\n";
+                    }
+
+                    for (Value *pointer : pointers)
+                    {
+                        outFile << "  -> Points from: ";
+                        std::string pointerStr;
+                        llvm::raw_string_ostream rso(pointerStr);
+                        pointer->print(rso);
+                        rso.flush();
+                        outFile << pointerStr << "\n";
+                    }
+                }
+
                 outFile.close(); // Close the file after writing
             }
             else
