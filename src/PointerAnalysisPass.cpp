@@ -19,7 +19,7 @@ namespace
             PA.analyze(M);
 
             // Output the results to a file
-            std::ofstream outFile("output.txt"); // Open the output file
+            std::ofstream outFile(PA.getOutputFileName()); // Open the output file
 
             if (outFile.is_open())
             {
@@ -37,13 +37,24 @@ namespace
                 const auto &callGraph = PA.getCallGraph();
                 for (const auto &entry : callGraph)
                 {
-                    Function *caller = entry.first;
+                    // entry.first is now a CGNode, entry.second is a set of CGNode
+                    const auto caller = callGraph.getNode(entry.first);
                     const auto &callees = entry.second;
 
-                    outFile << "Caller: " << caller->getName().str() << "\n";
-                    for (Function *callee : callees)
+                    std::string callerStr;
+                    llvm::raw_string_ostream rso(callerStr);
+                    rso << caller;
+                    rso.flush();
+                    outFile << "Caller: " << callerStr << "\n";
+
+                    for (const auto &callee_id : callees)
                     {
-                        outFile << "  -> Callee: " << callee->getName().str() << "\n";
+                        const auto callee = callGraph.getNode(callee_id);
+                        std::string calleeStr;
+                        llvm::raw_string_ostream rso(calleeStr);
+                        rso << callee;
+                        rso.flush();
+                        outFile << "  -> Callee: " << calleeStr << "\n";
                     }
                 }
 
@@ -58,7 +69,7 @@ namespace
                     pointerStream.flush();
 
                     // skip printing function pointers
-                    if (entry.first->getType()->isFunctionTy())
+                    if (entry.first->value->getType()->isFunctionTy())
                     {
                         continue;
                     }
@@ -81,7 +92,7 @@ namespace
                 const auto &taint_map = PA.getTaintedObjectToPointersMap();
                 for (const auto &entry : taint_map)
                 {
-                    Value *taintedObject = entry.first;
+                    Value *taintedObject = entry.first->value;
                     const auto &pointers = entry.second;
 
                     outFile << "Tainted Object: ";
@@ -93,7 +104,7 @@ namespace
                         outFile << taintedObjectStr << "\n";
                     }
 
-                    for (Value *pointer : pointers)
+                    for (Node *pointer : pointers)
                     {
                         outFile << "  -> Points from: ";
                         std::string pointerStr;
@@ -110,6 +121,10 @@ namespace
             {
                 errs() << "Error: Could not open file for writing results.\n";
             }
+
+            PA.printStatistics(); // Print statistics to stderr
+
+            PA.clear(); // Clear the analysis results
 
             // Indicate that the pass does not modify the IR
             return PreservedAnalyses::all();

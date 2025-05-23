@@ -2,7 +2,6 @@
   "tagged_objects": [
     "@alloc394 = private unnamed_addr constant <{ [29 x i8] }> <{ [29 x i8] c\"What is my first event today?\" }>, align 1",
     "@alloc393 = private unnamed_addr constant <{ [5 x i8] }> <{ [5 x i8] c\"UserA\" }>, align 1",
-    "@alloc395 = private unnamed_addr constant <{ [5 x i8] }> <{ [5 x i8] c\"UserB\" }>, align 1",
-    "%shared_map = alloca ptr, align 8"
+    "@alloc395 = private unnamed_addr constant <{ [5 x i8] }> <{ [5 x i8] c\"UserB\" }>, align 1"
   ]
 }

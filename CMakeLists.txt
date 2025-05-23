@@ -14,6 +14,8 @@ add_definitions(${LLVM_DEFINITIONS})
 add_library(PointerAnalysisPass MODULE
   src/PointerAnalysis.cpp
   src/PointerAnalysisPass.cpp
+  src/KCallsitePointerAnalysis.cpp
+  src/CallGraph.cpp
 )
 
 # Link against LLVM libraries

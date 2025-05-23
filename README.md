@@ -2,10 +2,10 @@
 
 This is the first automated framework to integrate the detections of data leaks and access control policy defects into systematic testing for multi-threaded and event-driven programs.
 
-## pre-requisite
+## pre-requisite for building AFG
 install the following compatible versions for this project
 - `llvm 17.0.6` 
-- `rustc 1.84.1 (e71f9a9a9 2025-01-27)`
+- `rustc 1.68.0 (2c8cc3432 2023-03-06)`
 - `cmake 3.20.0`
 
 
@@ -49,3 +49,14 @@ rustc --version
 
 ## rust_monitor: dynamic refinement
 see [our forked madsim](https://github.com/bozhen-liu/madsim)
+
+
+
+## examples
+use `rustc 1.84.1 (e71f9a9a9 2025-01-27)` due to compatibility requirement
+
+- demo: `std::thread` + shared hashmap (replacing redis connection)
+- tokio-demo: `tokio` + shared hashmap (replacing redis connection)
+- madsim-demo: `madsim` + `madsim_tokio` + shared hashmap (replacing redis connection); `mod tests`
+
+- madsim-mpsc: `madsim` + `madsim_tokio` + mspc (channel); `mod tests`

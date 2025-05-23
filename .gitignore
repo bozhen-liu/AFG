@@ -4,8 +4,8 @@ output.txt
 build/
 run.sh
 examples/demo/target/
-examples/async-demo/target/
-examples/async-mpsc/target/
+examples/madsim-demo/target/
+examples/madsim-mpsc/target/
 examples/tokio-demo/target/
 todo.txt
 commands.txt
