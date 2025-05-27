@@ -11,6 +11,7 @@
 #include <utility>
 #include <deque>
 #include "CallGraph.h"
+#include "ChannelSemantics.h"
 
 namespace llvm
 {
@@ -75,6 +76,21 @@ namespace llvm
         return os;
     }
 
+    // Forward declare constraint types for use in class
+    enum ConstraintType
+    {
+        Assign,
+        Load,
+        Store
+    };
+
+    struct PtrConstraint
+    {
+        ConstraintType type;
+        Node *src; // Source value
+        Node *dst; // Destination value
+    };
+
     class PointerAnalysis
     {
     public:
@@ -109,6 +125,15 @@ namespace llvm
             callGraph.clear();
         }
 
+        // Channel semantics integration
+        ChannelSemantics channelSemantics;
+        
+        // Make Worklist accessible for channel constraints
+        std::vector<PtrConstraint> Worklist; // Worklist for new constraints to visit
+
+        // Make getOrCreateNode public for channel semantics
+        Node *getOrCreateNode(llvm::Value *value, Context context = Everywhere); // create or find node: ctx == Everywhere
+
     protected:
         int nextNodeId = 0;     // Monotonically increasing node ID
         llvm::Function *mainFn; // Real main function, not the one "main" for rust
@@ -125,20 +150,6 @@ namespace llvm
         void solveConstraints();
 
     private:
-        enum ConstraintType
-        {
-            Assign,
-            Load,
-            Store
-        };
-
-        struct PtrConstraint
-        {
-            ConstraintType type;
-            Node *src; // Source value
-            Node *dst; // Destination value
-        };
-
         std::string inputDir;          // Directory containing the JSON file
         std::string taintJsonFile;     // JSON file name
         std::string outputFile;        // Output file name
@@ -154,13 +165,11 @@ namespace llvm
         void processGlobalVar(GlobalVariable &GV);
         void getPtrsPTSIncludeTaintedObjects();
 
-        Node *getOrCreateNode(llvm::Value *value, Context context = Everywhere); // create or find node: ctx == Everywhere
         void AddToFunctionWorklist(Function *callee);
         void processVtable(GlobalVariable &GV);
         void resolveVtable(Value *vtable);
         void visitFunction(Function *F, Context context = Everywhere);
 
-        std::vector<PtrConstraint> Worklist; // Worklist for new constraints to visit
         void handleStore(StoreInst *SI, Context context = Everywhere);
         void handleLoad(LoadInst *LI, Context context = Everywhere);
         void handleAlloca(AllocaInst *AI, Context context = Everywhere);
@@ -171,6 +180,10 @@ namespace llvm
         void handleAtomicCmpXchg(AtomicCmpXchgInst *ACX, Context context = Everywhere);
         void handleInvokeInst(InvokeInst *II, Instruction &I, Context context = Everywhere);
         void handleCallInst(CallInst *CI, Instruction &I, Context context = Everywhere);
+        
+        // Channel-specific analysis methods
+        void analyzeChannelOperations();
+        void integrateChannelConstraints();
     };
 
 } // namespace llvm
