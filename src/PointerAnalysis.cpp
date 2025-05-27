@@ -46,6 +46,12 @@ void PointerAnalysis::analyze(Module &M)
 
     errs() << "Pointer analysis completed.\n";
 
+    // Analyze channel operations after main analysis
+    analyzeChannelOperations();
+    
+    // Integrate channel constraints
+    integrateChannelConstraints();
+
     getPtrsPTSIncludeTaintedObjects();
 }
 
@@ -604,6 +610,31 @@ void PointerAnalysis::handleCallInst(CallInst *CI, Instruction &I, Context conte
 {
     Function *caller = CI->getFunction(); // Get the caller function
     Function *calledFn = CI->getCalledFunction();
+    
+    // Check if this is a channel operation first
+    if (channelSemantics.isChannelOperation(CI)) {
+        ChannelOperation* channelOp = channelSemantics.analyzeChannelCall(CI);
+        if (channelOp) {
+            channelSemantics.channel_operations.push_back(channelOp);
+            
+            if (DebugMode) {
+                errs() << "Detected channel operation: ";
+                switch (channelOp->operation) {
+                    case ChannelOperation::SEND:
+                        errs() << "SEND";
+                        break;
+                    case ChannelOperation::RECV:
+                        errs() << "RECV";
+                        break;
+                    case ChannelOperation::CHANNEL_CREATE:
+                        errs() << "CREATE";
+                        break;
+                }
+                errs() << " in function: " << caller->getName() << "\n";
+            }
+        }
+    }
+    
     if (calledFn)
     {
         // Add to the call graph
@@ -837,5 +868,50 @@ const void PointerAnalysis::printStatistics()
     errs() << "PointsToMap: " << numNodes << " nodes, " << numEdges << " edges\n";
     errs() << "CallGraph: " << callGraph.numNodes() << " nodes, " << callGraph.numEdges() << " edges\n";
     errs() << "Visited functions: " << numVisitedFunctions << "\n";
+    
+    // Print channel semantics statistics
+    channelSemantics.printChannelInfo(errs());
+    
     errs() << "==================================\n";
+}
+
+void PointerAnalysis::analyzeChannelOperations()
+{
+    if (DebugMode) {
+        errs() << "=== Analyzing Channel Operations ===\n";
+    }
+    
+    // The channel operations have already been collected during the main analysis
+    // in handleCallInst. Here we can perform additional analysis if needed.
+    
+    // For example, we could validate that channels are used correctly:
+    // - Every send has a corresponding receive
+    // - Channel endpoints are properly paired
+    // - No use-after-close violations
+    
+    if (DebugMode) {
+        errs() << "Found " << channelSemantics.channel_operations.size() 
+               << " channel operations\n";
+        errs() << "Found " << channelSemantics.endpoint_map.size() 
+               << " channel endpoints\n";
+        errs() << "Found " << channelSemantics.channel_pairs.size() 
+               << " channel pairs\n";
+    }
+}
+
+void PointerAnalysis::integrateChannelConstraints()
+{
+    if (DebugMode) {
+        errs() << "=== Integrating Channel Constraints ===\n";
+    }
+    
+    // Apply channel-specific constraints to the pointer analysis
+    channelSemantics.applyChannelConstraints(this);
+    
+    // Re-solve constraints with the new channel constraints
+    solveConstraints();
+    
+    if (DebugMode) {
+        errs() << "Channel constraints integrated and constraints re-solved\n";
+    }
 }

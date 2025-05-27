@@ -7,5 +7,6 @@ examples/demo/target/
 examples/madsim-demo/target/
 examples/madsim-mpsc/target/
 examples/tokio-demo/target/
+examples/channel-test/target/
 todo.txt
 commands.txt
