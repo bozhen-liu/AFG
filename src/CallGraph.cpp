@@ -12,16 +12,16 @@ namespace llvm
             return it->second;
         }
         CGNode node = CGNode(nextNodeId++, func, ctx);
+
+        auto found = idToNodeMap.find(node.id);
+        assert(found == idToNodeMap.end() &&
+               ("Node ID already exists in idToNodeMap: id=" + std::to_string(node.id) +
+                ", existing function=" + (found != idToNodeMap.end() && found->second.function ? found->second.function->getName().str() : "null"))
+                   .c_str());
+
         idToNodeMap[node.id] = node;
         ValueContextToNodeMap[key] = node;
         return node;
-    }
-
-    void CallGraph::createNodeAndAddEdge(llvm::Function *caller, llvm::Function *callee)
-    {
-        CGNode callerNode = getOrCreateNode(caller);
-        CGNode calleeNode = getOrCreateNode(callee);
-        addEdge(callerNode, calleeNode);
     }
 
 } // namespace llvm

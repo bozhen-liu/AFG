@@ -24,9 +24,30 @@ namespace llvm
         const llvm::Value *operator[](size_t idx) const { return values[idx]; }
         auto begin() const { return values.begin(); }
         auto end() const { return values.end(); }
+
+        void print(llvm::raw_ostream &os) const
+        {
+            os << "[";
+            for (const auto *v : values)
+            {
+                if (v)
+                    v->print(os);
+                else
+                    os << "null";
+                os << ", ";
+            }
+            os << "]";
+        }
     };
 
     inline Context Everywhere = Context(); // Singleton instance for context-insensitive analysis
+
+    // Overload operator<< for Node as a free function
+    inline llvm::raw_ostream &operator<<(llvm::raw_ostream &os, const llvm::Context &context)
+    {
+        context.print(os);
+        return os;
+    }
 
     struct CGNode
     {
@@ -60,7 +81,7 @@ namespace llvm
         {
             os << "[CGNode id=" << id << ", function=";
             if (function)
-                function->print(os);
+                os << function->getName();
             else
                 os << "null";
             os << ", context=";
@@ -71,7 +92,6 @@ namespace llvm
             }
             else
             {
-
                 for (auto it = context.begin(); it != context.end(); ++it)
                 {
                     if (*it)
@@ -166,7 +186,6 @@ namespace llvm
         using Node2EdgeSet = std::unordered_map<int, CallEdgeSet>;
 
         CGNode getOrCreateNode(llvm::Function *func, Context ctx = Everywhere);
-        void createNodeAndAddEdge(llvm::Function *caller, llvm::Function *callee);
 
         // Add an edge from caller to callee
         void addEdge(CGNode caller, CGNode callee)

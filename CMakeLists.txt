@@ -16,6 +16,7 @@ add_library(PointerAnalysisPass MODULE
   src/PointerAnalysisPass.cpp
   src/KCallsitePointerAnalysis.cpp
   src/CallGraph.cpp
+  src/OriginPointerAnalysis.cpp
 )
 
 # Link against LLVM libraries
