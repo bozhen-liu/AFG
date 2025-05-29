@@ -226,6 +226,8 @@ namespace llvm
         auto begin() const { return graph_.begin(); }
         auto end() const { return graph_.end(); }
 
+        void printCG(std::ofstream &outFile) const;
+
         void clear()
         {
             graph_.clear();
@@ -236,4 +238,5 @@ namespace llvm
     private:
         Node2EdgeSet graph_;
     };
+
 } // namespace llvm

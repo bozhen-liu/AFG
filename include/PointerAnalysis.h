@@ -140,6 +140,9 @@ namespace llvm
         virtual void visitCallInst(CallInst &I);
         void visitInstruction(Instruction &I); // fallback
 
+        void printPointsToMap(std::ofstream &os) const;
+        void printTaintedObjects(std::ofstream &os) const;
+
     protected:
         int nextNodeId = 0;     // Monotonically increasing node ID
         llvm::Function *mainFn; // Real main function, not the one "main" for rust

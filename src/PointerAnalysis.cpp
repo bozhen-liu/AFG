@@ -870,3 +870,66 @@ const void PointerAnalysis::printStatistics()
     errs() << "Visited functions: " << numVisitedFunctions << "\n";
     errs() << "==================================\n";
 }
+
+// Iterate through the points-to map and print the results
+void PointerAnalysis::printPointsToMap(std::ofstream &outFile) const
+{
+    outFile << "\n\n\n\nPointer Analysis Results:\n";
+    const auto &ptm = getPointsToMap();
+    for (const auto &entry : ptm)
+    {
+        std::string pointerStr;
+        llvm::raw_string_ostream pointerStream(pointerStr);
+        pointerStream << *entry.first; // Use LLVM's raw_ostream to print the pointer
+        pointerStream.flush();
+
+        // skip printing function pointers
+        if (entry.first->value->getType()->isFunctionTy())
+        {
+            outFile << "Skipping function pointer: " << pointerStr << "\n";
+            continue;
+        }
+
+        outFile << "Pointer: " << pointerStr << "\n";
+
+        for (auto *target : entry.second)
+        {
+            std::string targetStr;
+            llvm::raw_string_ostream targetStream(targetStr);
+            targetStream << *target; // Use LLVM's raw_ostream to print the target
+            targetStream.flush();
+
+            outFile << "  -> " << targetStr << "\n";
+        }
+    }
+}
+
+void PointerAnalysis::printTaintedObjects(std::ofstream &outFile) const
+{
+    outFile << "\n\n\n\nTainted Object to Pointers Map:\n";
+    const auto &taint_map = getTaintedObjectToPointersMap();
+    for (const auto &entry : taint_map)
+    {
+        Value *taintedObject = entry.first->value;
+        const auto &pointers = entry.second;
+
+        outFile << "Tainted Object: ";
+        {
+            std::string taintedObjectStr;
+            llvm::raw_string_ostream rso(taintedObjectStr);
+            taintedObject->print(rso);
+            rso.flush();
+            outFile << taintedObjectStr << "\n";
+        }
+
+        for (Node *pointer : pointers)
+        {
+            outFile << "  -> Points from: ";
+            std::string pointerStr;
+            llvm::raw_string_ostream rso(pointerStr);
+            pointer->print(rso);
+            rso.flush();
+            outFile << pointerStr << "\n";
+        }
+    }
+}

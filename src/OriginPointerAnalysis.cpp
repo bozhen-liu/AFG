@@ -1,5 +1,6 @@
 #include "OriginPointerAnalysis.h"
 #include "llvm/Demangle/Demangle.h"
+#include "Flags.h"
 
 using namespace llvm;
 
@@ -18,7 +19,8 @@ static bool isThreadRelatedCallInstruction(const Value *callsite)
                 demangled = demangled.substr(0, last_colon);
             }
 
-            // errs() << "Demangled name: " << demangled << "\n";
+            if (DebugMode)
+                errs() << "Demangled name: " << demangled << "\n";
 
             return (demangled == "std::thread::spawn" ||
                     demangled == "tokio::task::spawn");
