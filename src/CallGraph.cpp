@@ -13,6 +13,10 @@ namespace llvm
         }
         CGNode node = CGNode(nextNodeId++, func, ctx);
 
+        // errs() << "Creating CGNode: id=" << node.id
+        //        << ", function=" << (func ? func->getName() : "null")
+        //        << ", context=" << ctx << "\n";
+
         auto found = idToNodeMap.find(node.id);
         assert(found == idToNodeMap.end() &&
                ("Node ID already exists in idToNodeMap: id=" + std::to_string(node.id) +

@@ -28,13 +28,16 @@ namespace llvm
         void print(llvm::raw_ostream &os) const
         {
             os << "[";
-            for (const auto *v : values)
+            for (size_t i = 0; i < values.size(); ++i)
             {
-                if (v)
-                    v->print(os);
+                os << "(" + std::to_string(i) + ") ";
+                auto ctx = values[i];
+                if (ctx)
+                    ctx->print(os);
                 else
                     os << "null";
-                os << ", ";
+                if (i < values.size() - 1)
+                    os << ", ";
             }
             os << "]";
         }
@@ -84,23 +87,14 @@ namespace llvm
                 os << function->getName();
             else
                 os << "null";
-            os << ", context=";
-            os << "[";
+            os << ", context=[";
             if (context == Everywhere)
             {
                 os << "Everywhere";
             }
             else
             {
-                for (auto it = context.begin(); it != context.end(); ++it)
-                {
-                    if (*it)
-                        (*it)->print(os);
-                    else
-                        os << "null";
-                    if (std::next(it) != context.end())
-                        os << ", ";
-                }
+                context.print(os);
             }
             os << "]";
             os << "]";

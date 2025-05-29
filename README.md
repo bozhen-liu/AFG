@@ -60,3 +60,11 @@ use `rustc 1.84.1 (e71f9a9a9 2025-01-27)` due to compatibility requirement
 - madsim-demo: `madsim` + `madsim_tokio` + shared hashmap (replacing redis connection); `mod tests`
 
 - madsim-mpsc: `madsim` + `madsim_tokio` + mspc (channel); `mod tests`
+
+
+
+## how to run tests
+- build and run tests
+```bash
+cd $root_proj_dir/tests/pointer
+```

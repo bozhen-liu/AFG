@@ -213,50 +213,58 @@ Node *PointerAnalysis::getOrCreateNode(llvm::Value *value, Context context)
     return node;
 }
 
+Context PointerAnalysis::getContext(const Value *newCallSite)
+{
+    return Everywhere; // Default context is Everywhere
+}
+
 void PointerAnalysis::processInstruction(Instruction &I, CGNode *cgnode)
 {
-    Context context = cgnode->context;
-    // regular instructions
-    if (auto *SI = dyn_cast<StoreInst>(&I))
-    {
-        handleStore(SI, context);
-    }
-    else if (auto *LI = dyn_cast<LoadInst>(&I))
-    {
-        handleLoad(LI, context);
-    }
-    else if (auto *AI = dyn_cast<AllocaInst>(&I))
-    {
-        handleAlloca(AI, context);
-    }
-    else if (auto *BC = dyn_cast<BitCastInst>(&I))
-    {
-        handleBitCast(BC, context);
-    }
-    else if (auto *GEP = dyn_cast<GetElementPtrInst>(&I))
-    {
-        handleGEP(GEP, context);
-    }
-    else if (auto *PN = dyn_cast<PHINode>(&I))
-    {
-        handlePHINode(PN, context);
-    }
-    else if (auto *ARMW = dyn_cast<AtomicRMWInst>(&I))
-    {
-        handleAtomicRMW(ARMW, context);
-    }
-    else if (auto *ACX = dyn_cast<AtomicCmpXchgInst>(&I))
-    {
-        handleAtomicCmpXchg(ACX, context);
-    }
-    else if (auto *II = dyn_cast<InvokeInst>(&I))
-    {
-        handleInvokeInst(II, I, cgnode);
-    }
-    else if (auto *CI = dyn_cast<CallInst>(&I))
-    {
-        handleCallInst(CI, I, cgnode);
-    }
+    CurrentCGNode = cgnode;
+    CurrentContext = getContext(&I);
+    visit(I); // InstVisitor dispatches to the correct visit* method
+
+    // // regular instructions
+    // if (auto *SI = dyn_cast<StoreInst>(&I))
+    // {
+    //     handleStore(SI, context);
+    // }
+    // else if (auto *LI = dyn_cast<LoadInst>(&I))
+    // {
+    //     handleLoad(LI, context);
+    // }
+    // else if (auto *AI = dyn_cast<AllocaInst>(&I))
+    // {
+    //     handleAlloca(AI, context);
+    // }
+    // else if (auto *BC = dyn_cast<BitCastInst>(&I))
+    // {
+    //     handleBitCast(BC, context);
+    // }
+    // else if (auto *GEP = dyn_cast<GetElementPtrInst>(&I))
+    // {
+    //     handleGEP(GEP, context);
+    // }
+    // else if (auto *PN = dyn_cast<PHINode>(&I))
+    // {
+    //     handlePHINode(PN, context);
+    // }
+    // else if (auto *ARMW = dyn_cast<AtomicRMWInst>(&I))
+    // {
+    //     handleAtomicRMW(ARMW, context);
+    // }
+    // else if (auto *ACX = dyn_cast<AtomicCmpXchgInst>(&I))
+    // {
+    //     handleAtomicCmpXchg(ACX, context);
+    // }
+    // else if (auto *II = dyn_cast<InvokeInst>(&I))
+    // {
+    //     handleInvokeInst(II, I, cgnode);
+    // }
+    // else if (auto *CI = dyn_cast<CallInst>(&I))
+    // {
+    //     handleCallInst(CI, I, cgnode);
+    // }
     // // Variadic functions (e.g., printf)
     // else if (auto *VAA = dyn_cast<VAArgInst>(&I))
     // {
@@ -385,12 +393,12 @@ void PointerAnalysis::processGlobalVar(GlobalVariable &GV)
     }
 }
 
-void PointerAnalysis::handleAlloca(AllocaInst *AI, Context context)
+void PointerAnalysis::visitAllocaInst(AllocaInst &AI)
 {
     // Convert the alloca to a string for comparison
     std::string aiStr;
     llvm::raw_string_ostream rso(aiStr);
-    AI->print(rso); // Use print to get the full LLVM IR representation -> TODO: this has leading or trailing spaces
+    AI.print(rso); // Use print to get the full LLVM IR representation -> TODO: this has leading or trailing spaces
     rso.flush();
 
     // Trim leading and trailing spaces
@@ -404,69 +412,70 @@ void PointerAnalysis::handleAlloca(AllocaInst *AI, Context context)
     {
         errs() << "(Alloca) Found tainted string: " << aiStr << "\n";
         // Assign this to the tagged object
-        if (TaintedObjects.find(AI) == TaintedObjects.end())
+        if (TaintedObjects.find(&AI) == TaintedObjects.end())
         {
-            TaintedObjects.insert(AI);
-            errs() << "Found tainted object \"" << AI << "\" to tainted string: " << aiStr << "\n";
+            TaintedObjects.insert(&AI);
+            errs() << "Found tainted object \"" << &AI << "\" to tainted string: " << aiStr << "\n";
         }
 
-        Node *aiNode = getOrCreateNode(AI, context);   // Use the AllocaInst as context
+        Context context = getContext(&AI); // Use the AllocaInst as context
+        Node *aiNode = getOrCreateNode(&AI, context);
         Worklist.push_back({Assign, nullptr, aiNode}); // Points to self
         errs() << "Added alloca \"" << AI << "\" to the worklist with context \"" << context << "\".\n";
     }
     else
     {
         // Handle non-tagged allocas
-        Node *aiNode = getOrCreateNode(AI, context);
+        Node *aiNode = getOrCreateNode(&AI, getContext());
         Worklist.push_back({Assign, nullptr, aiNode}); // Points to self
     }
 }
 
-void PointerAnalysis::handleStore(StoreInst *SI, Context context)
+void PointerAnalysis::visitStoreInst(StoreInst &SI)
 {
-    Value *val = SI->getValueOperand();
-    Value *ptr = SI->getPointerOperand();
+    Value *val = SI.getValueOperand();
+    Value *ptr = SI.getPointerOperand();
     if (val->getType()->isPointerTy())
     {
-        Node *valNode = getOrCreateNode(val, context);
-        Node *ptrNode = getOrCreateNode(ptr, context);
+        Node *valNode = getOrCreateNode(val, getContext());
+        Node *ptrNode = getOrCreateNode(ptr, getContext());
         Worklist.push_back({Store, valNode, ptrNode});
     }
 }
 
-void PointerAnalysis::handleLoad(LoadInst *LI, Context context)
+void PointerAnalysis::visitLoadInst(LoadInst &LI)
 {
-    Value *ptr = LI->getPointerOperand();
-    if (LI->getType()->isPointerTy())
+    Value *ptr = LI.getPointerOperand();
+    if (LI.getType()->isPointerTy())
     {
-        Node *ptrNode = getOrCreateNode(ptr, context);
-        Node *loadNode = getOrCreateNode(LI, context);
+        Node *ptrNode = getOrCreateNode(ptr, getContext());
+        Node *loadNode = getOrCreateNode(&LI, getContext());
         Worklist.push_back({Load, ptrNode, loadNode});
     }
 }
 
-void PointerAnalysis::handleBitCast(BitCastInst *BC, Context context)
+void PointerAnalysis::visitBitCastInst(BitCastInst &BC)
 {
-    if (BC->getType()->isPointerTy())
+    if (BC.getType()->isPointerTy())
     {
-        Value *basePtr = BC->getOperand(0);
-        Node *basePtrNode = getOrCreateNode(basePtr, context);
-        Node *bcNode = getOrCreateNode(BC, context);
+        Value *basePtr = BC.getOperand(0);
+        Node *basePtrNode = getOrCreateNode(basePtr, getContext());
+        Node *bcNode = getOrCreateNode(&BC, getContext());
         Worklist.push_back({Assign, basePtrNode, bcNode});
     }
 }
 
-void PointerAnalysis::handleGEP(GetElementPtrInst *GEP, Context context)
+void PointerAnalysis::visitGetElementPtrInst(GetElementPtrInst &GEP)
 {
-    if (GEP->getType()->isPointerTy())
+    if (GEP.getType()->isPointerTy())
     {
-        Value *basePtr = GEP->getPointerOperand();
-        Node *basePtrNode = getOrCreateNode(basePtr, context);
-        Node *gepNode = getOrCreateNode(GEP, context);
+        Value *basePtr = GEP.getPointerOperand();
+        Node *basePtrNode = getOrCreateNode(basePtr, getContext());
+        Node *gepNode = getOrCreateNode(&GEP, getContext());
         Worklist.push_back({Assign, basePtrNode, gepNode});
 
         // Handle struct field or array access
-        for (auto idx = GEP->idx_begin(); idx != GEP->idx_end(); ++idx)
+        for (auto idx = GEP.idx_begin(); idx != GEP.idx_end(); ++idx)
         {
             if (auto *constIdx = dyn_cast<ConstantInt>(idx))
             {
@@ -474,8 +483,8 @@ void PointerAnalysis::handleGEP(GetElementPtrInst *GEP, Context context)
 
                 // Generate constraints for array or struct field access
                 // For simplicity, treat all derived pointers as pointing to the base
-                Node *basePtrNode = getOrCreateNode(basePtr, context);
-                Node *gepNode = getOrCreateNode(GEP, context);
+                Node *basePtrNode = getOrCreateNode(basePtr, getContext());
+                Node *gepNode = getOrCreateNode(&GEP, getContext());
                 Worklist.push_back({Assign, basePtrNode, gepNode});
             }
             else
@@ -483,69 +492,68 @@ void PointerAnalysis::handleGEP(GetElementPtrInst *GEP, Context context)
                 // errs() << "GEP index is not a constant.\n";
 
                 // Non-constant index: conservatively assume it may point anywhere
-                Node *basePtrNode = getOrCreateNode(basePtr, context);
-                Node *gepNode = getOrCreateNode(GEP, context);
+                Node *basePtrNode = getOrCreateNode(basePtr, getContext());
+                Node *gepNode = getOrCreateNode(&GEP, getContext());
                 Worklist.push_back({Assign, basePtrNode, gepNode});
             }
         }
     }
 }
 
-void PointerAnalysis::handlePHINode(PHINode *PN, Context context)
+void PointerAnalysis::visitPHINode(PHINode &PN)
 {
-    if (PN->getType()->isPointerTy())
+    if (PN.getType()->isPointerTy())
     {
-        for (unsigned i = 0; i < PN->getNumIncomingValues(); ++i)
+        for (unsigned i = 0; i < PN.getNumIncomingValues(); ++i)
         {
-            Value *incoming = PN->getIncomingValue(i);
-            Node *incomingNode = getOrCreateNode(incoming, context);
-            Node *PNNode = getOrCreateNode(PN, context);
+            Value *incoming = PN.getIncomingValue(i);
+            Node *incomingNode = getOrCreateNode(incoming, getContext());
+            Node *PNNode = getOrCreateNode(&PN, getContext());
             Worklist.push_back({Assign, incomingNode, PNNode});
         }
     }
 }
 
-void PointerAnalysis::handleAtomicRMW(AtomicRMWInst *ARMW, Context context)
+void PointerAnalysis::visitAtomicRMWInst(AtomicRMWInst &ARMW)
 {
-    Value *ptr = ARMW->getPointerOperand();
+    Value *ptr = ARMW.getPointerOperand();
     if (ptr->getType()->isPointerTy())
     {
-        Node *ptrNode = getOrCreateNode(ptr, context);
-        Node *valNode = getOrCreateNode(ARMW->getValOperand(), context);
+        Node *ptrNode = getOrCreateNode(ptr, getContext());
+        Node *valNode = getOrCreateNode(ARMW.getValOperand(), getContext());
         Worklist.push_back({Store, valNode, ptrNode});
     }
 }
 
-void PointerAnalysis::handleAtomicCmpXchg(AtomicCmpXchgInst *ACX, Context context)
+void PointerAnalysis::visitAtomicCmpXchgInst(AtomicCmpXchgInst &ACX)
 {
-    Value *ptr = ACX->getPointerOperand();
+    Value *ptr = ACX.getPointerOperand();
     if (ptr->getType()->isPointerTy())
     {
-        Node *ptrNode = getOrCreateNode(ptr, context);
-        Node *newValNode = getOrCreateNode(ACX->getNewValOperand(), context);
+        Node *ptrNode = getOrCreateNode(ptr, getContext());
+        Node *newValNode = getOrCreateNode(ACX.getNewValOperand(), getContext());
         Worklist.push_back({Store, newValNode, ptrNode});
     }
 }
 
-void PointerAnalysis::handleInvokeInst(InvokeInst *II, Instruction &I, CGNode *cgnode)
+void PointerAnalysis::visitInvokeInst(InvokeInst &II)
 {
-    Function *calledFn = II->getCalledFunction();
-    Context context = cgnode->context;
+    Function *calledFn = II.getCalledFunction();
     if (calledFn) // handle direct calls
     {
         // Add to the call graph
-        CGNode callee = callGraph.getOrCreateNode(calledFn, context);
-        callGraph.addEdge(*cgnode, callee);
+        CGNode callee = callGraph.getOrCreateNode(calledFn, CurrentContext);
+        callGraph.addEdge(*CurrentCGNode, callee);
 
         // Add constraints for parameter passing
-        for (unsigned i = 0; i < II->arg_size(); ++i)
+        for (unsigned i = 0; i < II.arg_size(); ++i)
         {
-            Value *arg = II->getArgOperand(i);
+            Value *arg = II.getArgOperand(i);
             if (arg->getType()->isPointerTy())
             {
-                Node *argNode = getOrCreateNode(arg, context);
+                Node *argNode = getOrCreateNode(arg, CurrentContext);
                 Argument *param = calledFn->getArg(i);
-                Node *paramNode = getOrCreateNode(param, context);
+                Node *paramNode = getOrCreateNode(param, CurrentContext);
                 Worklist.push_back({Assign, argNode, paramNode});
             }
         }
@@ -557,18 +565,18 @@ void PointerAnalysis::handleInvokeInst(InvokeInst *II, Instruction &I, CGNode *c
         // Add constraints for return value
         if (calledFn->getReturnType()->isPointerTy())
         {
-            Node *calledFnNode = getOrCreateNode(calledFn, context);
-            Node *returnNode = getOrCreateNode(&I, context);
+            Node *calledFnNode = getOrCreateNode(calledFn, CurrentContext);
+            Node *returnNode = getOrCreateNode(&II, CurrentContext);
             Worklist.push_back({Assign, calledFnNode, returnNode});
         }
     }
 
     // Handle indirect calls (e.g., via vtable)
-    Value *calledValue = II->getCalledOperand();
+    Value *calledValue = II.getCalledOperand();
     if (calledValue->getType()->isPointerTy())
     {
         // Handle indirect calls
-        Node *calledValueNode = getOrCreateNode(calledValue, context);
+        Node *calledValueNode = getOrCreateNode(calledValue, CurrentContext);
         auto &targets = pointsToMap[calledValueNode];
         for (Node *target : targets)
         {
@@ -580,18 +588,18 @@ void PointerAnalysis::handleInvokeInst(InvokeInst *II, Instruction &I, CGNode *c
                 // errs() << "Target Function: " << indirectFn->getName() << "\n";
 
                 // Add to the call graph
-                CGNode indirectCallee = callGraph.getOrCreateNode(indirectFn, context);
-                callGraph.addEdge(*cgnode, indirectCallee);
+                CGNode indirectCallee = callGraph.getOrCreateNode(indirectFn, CurrentContext);
+                callGraph.addEdge(*CurrentCGNode, indirectCallee);
 
                 // Add constraints for parameter passing
-                for (unsigned i = 0; i < II->arg_size(); ++i)
+                for (unsigned i = 0; i < II.arg_size(); ++i)
                 {
-                    Value *arg = II->getArgOperand(i);
+                    Value *arg = II.getArgOperand(i);
                     if (arg->getType()->isPointerTy())
                     {
-                        Node *argNode = getOrCreateNode(arg, context);
+                        Node *argNode = getOrCreateNode(arg, CurrentContext);
                         Argument *param = indirectFn->getArg(i);
-                        Node *paramNode = getOrCreateNode(param, context);
+                        Node *paramNode = getOrCreateNode(param, CurrentContext);
                         Worklist.push_back({Assign, argNode, paramNode});
                     }
                 }
@@ -603,8 +611,8 @@ void PointerAnalysis::handleInvokeInst(InvokeInst *II, Instruction &I, CGNode *c
                 // Add constraints for return value
                 if (indirectFn->getReturnType()->isPointerTy())
                 {
-                    Node *indirectFnNode = getOrCreateNode(indirectFn, context);
-                    Node *returnNode = getOrCreateNode(&I, context);
+                    Node *indirectFnNode = getOrCreateNode(indirectFn, CurrentContext);
+                    Node *returnNode = getOrCreateNode(&II, CurrentContext);
                     Worklist.push_back({Assign, indirectFnNode, returnNode});
                 }
             }
@@ -612,25 +620,24 @@ void PointerAnalysis::handleInvokeInst(InvokeInst *II, Instruction &I, CGNode *c
     }
 }
 
-void PointerAnalysis::handleCallInst(CallInst *CI, Instruction &I, CGNode *cgnode)
+void PointerAnalysis::visitCallInst(CallInst &CI)
 {
-    Function *calledFn = CI->getCalledFunction();
-    Context context = cgnode->context;
+    Function *calledFn = CI.getCalledFunction();
     if (calledFn)
     {
         // Add to the call graph
-        CGNode callee = callGraph.getOrCreateNode(calledFn, cgnode->context);
-        callGraph.addEdge(*cgnode, callee);
+        CGNode callee = callGraph.getOrCreateNode(calledFn, CurrentContext);
+        callGraph.addEdge(*CurrentCGNode, callee);
 
         // Add constraints for parameter passing
-        for (unsigned i = 0; i < CI->arg_size(); ++i)
+        for (unsigned i = 0; i < CI.arg_size(); ++i)
         {
-            Value *arg = CI->getArgOperand(i);
+            Value *arg = CI.getArgOperand(i);
             if (arg->getType()->isPointerTy())
             {
-                Node *argNode = getOrCreateNode(arg, context);
+                Node *argNode = getOrCreateNode(arg, CurrentContext);
                 Argument *param = calledFn->getArg(i);
-                Node *paramNode = getOrCreateNode(param, context);
+                Node *paramNode = getOrCreateNode(param, CurrentContext);
                 Worklist.push_back({Assign, argNode, paramNode});
             }
         }
@@ -641,15 +648,24 @@ void PointerAnalysis::handleCallInst(CallInst *CI, Instruction &I, CGNode *cgnod
         // Add constraints for return value
         if (calledFn->getReturnType()->isPointerTy())
         {
-            Node *calledFnNode = getOrCreateNode(calledFn, context);
-            Node *returnNode = getOrCreateNode(&I, context);
+            Node *calledFnNode = getOrCreateNode(calledFn, CurrentContext);
+            Node *returnNode = getOrCreateNode(&CI, CurrentContext);
             Worklist.push_back({Assign, calledFnNode, returnNode});
         }
     }
-    else if (CI->isInlineAsm())
+    else if (CI.isInlineAsm())
     {
         // TODO: Conservative handling: assume all pointers may be affected
+        if (DebugMode)
+            errs() << "TODO: CallInst is InlineAsm: " << CI << "\n";
     }
+}
+
+void PointerAnalysis::visitInstruction(Instruction &I)
+{
+    // fallback for unhandled instructions
+    if (DebugMode)
+        errs() << "Unhandled instruction: " << I << "\n";
 }
 
 void PointerAnalysis::solveConstraints()

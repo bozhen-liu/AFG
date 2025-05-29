@@ -12,17 +12,22 @@ namespace llvm
     public:
         unsigned K = 1; // Number of call sites to track for each function
 
-        KCallsitePointerAnalysis();
-
-        // Override processInstruction to propagate call string
-        void processInstruction(Instruction &I, CGNode *cgnode);
-
-        // Override call instruction handlers to propagate call string
-        void handleInvokeInst(InvokeInst *II, Instruction &I, CGNode *cgnode);
-        void handleCallInst(CallInst *CI, Instruction &I, CGNode *cgnode);
+        KCallsitePointerAnalysis(unsigned k) : PointerAnalysis(), K(k) {}
 
         // context related methods: context is from caller, value is the new callsite, return a new context
-        virtual Context getContext(Context context, const Value *newCallSite);
+        Context getContext(Context context, const Value *newCallSite);
+
+        // Override processInstruction to propagate call string
+        void processInstruction(Instruction &I, CGNode *cgnode) override
+        {
+            CurrentCGNode = cgnode;
+            CurrentContext = getContext(cgnode->context, &I);
+            visit(I); // Will use base class visit* unless overridden here
+        }
+
+        // // Override call instruction handlers to propagate call string
+        // void visitInvokeInst(InvokeInst &II) override;
+        // void visitCallInst(CallInst &CI) override;
     };
 
 } // namespace llvm

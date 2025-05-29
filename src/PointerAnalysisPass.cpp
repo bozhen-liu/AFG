@@ -32,12 +32,12 @@ namespace
             std::unique_ptr<PointerAnalysis> PA;
             if (AnalysisMode == "kcs")
             {
-                PA = std::make_unique<KCallsitePointerAnalysis>();
+                PA = std::make_unique<KCallsitePointerAnalysis>(KValue);
                 errs() << "Running k-callsite-sensitive pointer analysis with k = " << KValue << "\n";
             }
             else if (AnalysisMode == "origin")
             {
-                PA = std::make_unique<OriginPointerAnalysis>();
+                PA = std::make_unique<OriginPointerAnalysis>(KValue);
                 errs() << "Running origin pointer analysis with k = " << KValue << "\n";
             }
             else // Default to context-insensitive analysis

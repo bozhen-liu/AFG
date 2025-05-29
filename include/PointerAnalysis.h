@@ -5,6 +5,7 @@
 #include "llvm/IR/Type.h"
 #include "llvm/Support/raw_ostream.h"
 #include "llvm/IR/Instructions.h"
+#include "llvm/IR/InstVisitor.h"
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
@@ -89,7 +90,7 @@ namespace llvm
         Node *dst; // Destination value
     };
 
-    class PointerAnalysis
+    class PointerAnalysis : public InstVisitor<PointerAnalysis>
     {
     public:
         // Debug flag to enable or disable debugging output
@@ -123,6 +124,22 @@ namespace llvm
             callGraph.clear();
         }
 
+        virtual Context getContext(const Value *newCallSite = nullptr);
+        virtual void processInstruction(Instruction &I, CGNode *cgnode);
+
+        // Visitor methods
+        void visitStoreInst(StoreInst &I);
+        void visitLoadInst(LoadInst &I);
+        void visitAllocaInst(AllocaInst &I);
+        void visitBitCastInst(BitCastInst &I);
+        void visitGetElementPtrInst(GetElementPtrInst &I);
+        void visitPHINode(PHINode &I);
+        void visitAtomicRMWInst(AtomicRMWInst &I);
+        void visitAtomicCmpXchgInst(AtomicCmpXchgInst &I);
+        virtual void visitInvokeInst(InvokeInst &I);
+        virtual void visitCallInst(CallInst &I);
+        void visitInstruction(Instruction &I); // fallback
+
     protected:
         int nextNodeId = 0;     // Monotonically increasing node ID
         llvm::Function *mainFn; // Real main function, not the one "main" for rust
@@ -140,20 +157,13 @@ namespace llvm
         void processVtable(GlobalVariable &GV);
         void resolveVtable(Value *vtable);
         void visitFunction(CGNode *cgnode);
-        virtual void processInstruction(Instruction &I, CGNode *cgnode);
+
+        // used to track the current context and CGNode during analysis
+        CGNode *CurrentCGNode = nullptr;
+        Context CurrentContext;
 
         std::vector<PtrConstraint> Worklist; // Worklist for new constraints to visit
         void solveConstraints();
-        void handleStore(StoreInst *SI, Context context = Everywhere);
-        void handleLoad(LoadInst *LI, Context context = Everywhere);
-        void handleAlloca(AllocaInst *AI, Context context = Everywhere);
-        void handleBitCast(BitCastInst *BC, Context context = Everywhere);
-        void handleGEP(GetElementPtrInst *GEP, Context context = Everywhere);
-        void handlePHINode(PHINode *PN, Context context = Everywhere);
-        void handleAtomicRMW(AtomicRMWInst *ARMW, Context context = Everywhere);
-        void handleAtomicCmpXchg(AtomicCmpXchgInst *ACX, Context context = Everywhere);
-        void handleInvokeInst(InvokeInst *II, Instruction &I, CGNode *cgnode);
-        void handleCallInst(CallInst *CI, Instruction &I, CGNode *cgnode);
 
     private:
         std::string inputDir;          // Directory containing the JSON file
