@@ -15,7 +15,7 @@ namespace llvm
         KCallsitePointerAnalysis(unsigned k) : PointerAnalysis(), K(k) {}
 
         // context related methods: context is from caller, value is the new callsite, return a new context
-        Context getContext(Context context, const Value *newCallSite);
+        Context getContext(Context context, const Value *newCallSite) override;
 
         // Override processInstruction to propagate call string
         void processInstruction(Instruction &I, CGNode *cgnode) override

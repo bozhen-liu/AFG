@@ -35,11 +35,11 @@ namespace
                 errs() << "Running context-insensitive pointer analysis\n";
             }
             PA->DebugMode = DebugMode; // Set the debug mode based on the command line option
+
             PA->analyze(M);
 
             // Output the results to a file
             std::ofstream outFile(PA->getOutputFileName()); // Open the output file
-
             if (outFile.is_open())
             {
                 errs() << "Writing pointer analysis results to " << PA->getOutputFileName() << " ...\n";
@@ -60,8 +60,16 @@ namespace
                 PA->getCallGraph().printCG(outFile);
                 // Iterate through the points-to map and print the results
                 PA->printPointsToMap(outFile);
-                // Print the taint result map
-                PA->printTaintedObjects(outFile);
+
+                if (AnalysisMode == "origin")
+                {
+                    // Print the tainted objects and their pointers
+                    auto *OPA = dynamic_cast<OriginPointerAnalysis *>(PA.get());
+                    if (OPA)
+                    {
+                        OPA->printTaintedObjects(outFile);
+                    }
+                }
 
                 outFile.close(); // Close the file after writing
             }

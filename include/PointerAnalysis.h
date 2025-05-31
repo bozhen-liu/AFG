@@ -98,14 +98,9 @@ namespace llvm
 
         using PointsToMapTy = std::unordered_map<Node *, std::unordered_set<Node *>>;
 
-        void analyze(Module &M);
+        virtual void analyze(Module &M);
         const PointsToMapTy &getPointsToMap() const;
         const CallGraph &getCallGraph() const { return callGraph; }
-        const std::unordered_map<Node *, std::unordered_set<Node *>> getTaintedObjectToPointersMap() const
-        {
-            return TaintedObjectToPointersMap;
-        }
-
         const std::unordered_set<Function *> &getVisitedFunctions() const
         {
             return Visited;
@@ -124,13 +119,13 @@ namespace llvm
             callGraph.clear();
         }
 
-        virtual Context getContext(const Value *newCallSite = nullptr);
+        virtual Context getContext(Context context, const Value *newCallSite = nullptr);
         virtual void processInstruction(Instruction &I, CGNode *cgnode);
 
         // Visitor methods
         void visitStoreInst(StoreInst &I);
         void visitLoadInst(LoadInst &I);
-        void visitAllocaInst(AllocaInst &I);
+        virtual void visitAllocaInst(AllocaInst &I);
         void visitBitCastInst(BitCastInst &I);
         void visitGetElementPtrInst(GetElementPtrInst &I);
         void visitPHINode(PHINode &I);
@@ -141,7 +136,6 @@ namespace llvm
         void visitInstruction(Instruction &I); // fallback
 
         void printPointsToMap(std::ofstream &os) const;
-        void printTaintedObjects(std::ofstream &os) const;
 
     protected:
         int nextNodeId = 0;     // Monotonically increasing node ID
@@ -158,6 +152,7 @@ namespace llvm
         Node *getOrCreateNode(llvm::Value *value, Context context = Everywhere); // create or find node: ctx == Everywhere
         void AddToFunctionWorklist(CGNode *callee);
         void processVtable(GlobalVariable &GV);
+        virtual void processGlobalVar(GlobalVariable &GV);
         void resolveVtable(Value *vtable);
         void visitFunction(CGNode *cgnode);
 
@@ -168,21 +163,13 @@ namespace llvm
         std::vector<PtrConstraint> Worklist; // Worklist for new constraints to visit
         void solveConstraints();
 
-    private:
         std::string inputDir;          // Directory containing the JSON file
-        std::string taintJsonFile;     // JSON file name
         std::string outputFile;        // Output file name
         bool parseInputDir(Module &M); // Parse the input directory from the module
+        bool parseOutputDir(Module &M); // Parse the output file path from the module
 
         llvm::Function *parseMainFn(Module &M); // Parse the main function from the module
         void onthefly(Module &M);               // On-the-fly analysis
-
-        std::unordered_set<std::string> TaggedStrings;                                     // tagged objects from json
-        std::unordered_set<Value *> TaintedObjects;                                        // tainted objects from LLVM IR
-        std::unordered_map<Node *, std::unordered_set<Node *>> TaintedObjectToPointersMap; // Map to track tainted objects and the pointers which point to them
-        void parseTaintConfig();
-        void processGlobalVar(GlobalVariable &GV);
-        void getPtrsPTSIncludeTaintedObjects();
     };
 
 } // namespace llvm

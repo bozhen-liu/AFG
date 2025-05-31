@@ -12,17 +12,9 @@
 using json = nlohmann::json;
 using namespace llvm;
 
-// Helper function to trim leading and trailing spaces
-static inline std::string trim(const std::string &str)
-{
-    auto start = str.find_first_not_of(" \t");
-    auto end = str.find_last_not_of(" \t");
-    return (start == std::string::npos) ? "" : str.substr(start, end - start + 1);
-}
-
 void PointerAnalysis::analyze(Module &M)
 {
-    if (!parseInputDir(M))
+    if (!parseOutputDir(M))
     {
         errs() << "Error: Could not parse input directory.\n";
         return;
@@ -38,8 +30,6 @@ void PointerAnalysis::analyze(Module &M)
     onthefly(M);
 
     errs() << "Pointer analysis completed.\n";
-
-    getPtrsPTSIncludeTaintedObjects();
 }
 
 llvm::Function *PointerAnalysis::parseMainFn(Module &M)
@@ -213,7 +203,7 @@ Node *PointerAnalysis::getOrCreateNode(llvm::Value *value, Context context)
     return node;
 }
 
-Context PointerAnalysis::getContext(const Value *newCallSite)
+Context PointerAnalysis::getContext(Context context = Everywhere, const Value *newCallSite)
 {
     return Everywhere; // Default context is Everywhere
 }
@@ -221,7 +211,7 @@ Context PointerAnalysis::getContext(const Value *newCallSite)
 void PointerAnalysis::processInstruction(Instruction &I, CGNode *cgnode)
 {
     CurrentCGNode = cgnode;
-    CurrentContext = getContext(&I);
+    CurrentContext = getContext(Everywhere, &I);
     visit(I); // InstVisitor dispatches to the correct visit* method
 
     // // regular instructions
@@ -356,79 +346,22 @@ void PointerAnalysis::processGlobalVar(GlobalVariable &GV)
     // Check if the global variable is a pointer type
     if (GV.getType()->isPointerTy())
     {
-        // Convert the GlobalVariable to a string for comparison
-        std::string gvStr;
-        llvm::raw_string_ostream rso(gvStr);
-        GV.print(rso); // Use print to get the full LLVM IR representation
-        rso.flush();
+        Node *gvNode = getOrCreateNode(&GV);
+        Worklist.push_back({Assign, nullptr, gvNode}); // Points to self
 
-        // Check if the GlobalVariable matches a tagged object
-        if (TaggedStrings.count(gvStr))
-        {
-            errs() << "(GlobalVariable) Found tainted string: " << gvStr << "\n";
-
-            // Assign this to the tagged object
-            if (TaintedObjects.find(&GV) == TaintedObjects.end())
-            {
-                TaintedObjects.insert(&GV);
-                errs() << "Found tainted object \"" << &GV << "\" to tainted string: " << gvStr << "\n";
-            }
-
-            // Use the node (GV) to create constraints
-            Node *gvNode = getOrCreateNode(&GV);           // Use the GlobalVariable as context
-            Worklist.push_back({Assign, nullptr, gvNode}); // Points to self
-
-            if (DebugMode)
-                errs() << "Added tainted global variable \"" << gvStr << "\" to the worklist.\n";
-        }
-        else
-        {
-            // Handle non-tagged global variables
-            Node *gvNode = getOrCreateNode(&GV);
-            Worklist.push_back({Assign, nullptr, gvNode}); // Points to self
-
-            if (DebugMode)
-                errs() << "Added global variable \"" << gvStr << "\" to the worklist.\n";
-        }
+        if (DebugMode)
+            errs() << "Added global variable \"" << gvNode << "\" to the worklist.\n";
     }
 }
 
 void PointerAnalysis::visitAllocaInst(AllocaInst &AI)
 {
-    // Convert the alloca to a string for comparison
-    std::string aiStr;
-    llvm::raw_string_ostream rso(aiStr);
-    AI.print(rso); // Use print to get the full LLVM IR representation -> TODO: this has leading or trailing spaces
-    rso.flush();
-
-    // Trim leading and trailing spaces
-    aiStr = trim(aiStr);
-
     if (DebugMode)
-        errs() << "Processing alloca: " << aiStr << "\n";
+        errs() << "Processing alloca: " << AI << "\n";
 
-    // Check if the alloca matches a tagged object
-    if (TaggedStrings.count(aiStr))
-    {
-        errs() << "(Alloca) Found tainted string: " << aiStr << "\n";
-        // Assign this to the tagged object
-        if (TaintedObjects.find(&AI) == TaintedObjects.end())
-        {
-            TaintedObjects.insert(&AI);
-            errs() << "Found tainted object \"" << &AI << "\" to tainted string: " << aiStr << "\n";
-        }
-
-        Context context = getContext(&AI); // Use the AllocaInst as context
-        Node *aiNode = getOrCreateNode(&AI, context);
-        Worklist.push_back({Assign, nullptr, aiNode}); // Points to self
-        errs() << "Added alloca \"" << AI << "\" to the worklist with context \"" << context << "\".\n";
-    }
-    else
-    {
-        // Handle non-tagged allocas
-        Node *aiNode = getOrCreateNode(&AI, getContext());
-        Worklist.push_back({Assign, nullptr, aiNode}); // Points to self
-    }
+    // Handle non-tagged allocas
+    Node *aiNode = getOrCreateNode(&AI, getContext());
+    Worklist.push_back({Assign, nullptr, aiNode}); // Points to self
 }
 
 void PointerAnalysis::visitStoreInst(StoreInst &SI)
@@ -741,109 +674,24 @@ bool PointerAnalysis::parseInputDir(Module &M)
     errs() << "Input file path: " << inputFile << "\n";
     llvm::SmallString<256> dirPath(inputFile);
     llvm::sys::path::remove_filename(dirPath); // Remove the filename, leaving the directory
+    inputDir = std::string(dirPath.c_str());
+    return true;
+}
 
-    // Construct taint_config.json path
-    llvm::SmallString<256> taintConfigPath(dirPath);
-    llvm::sys::path::append(taintConfigPath, "taint_config.json");
-    taintJsonFile = std::string(taintConfigPath.c_str());
-    errs() << "Taint config file path: " << taintJsonFile << "\n";
+bool PointerAnalysis::parseOutputDir(Module &M)
+{
+    if (inputDir.empty())
+    {   
+        parseInputDir(M); // Ensure inputDir is set
+    }
 
     // Construct output.txt path
-    llvm::SmallString<256> outputPath(dirPath);
+    llvm::SmallString<256> outputPath(inputDir);
     llvm::sys::path::append(outputPath, "output.txt");
     outputFile = std::string(outputPath.c_str());
     errs() << "Output file path: " << outputFile << "\n";
 
-    // Check if the taint config file exists
-    if (llvm::sys::fs::exists(taintJsonFile))
-    {
-        if (DebugMode)
-            errs() << "Taint config file exists. Continuing with analysis...\n";
-
-        parseTaintConfig(); // once
-        return true;
-    }
-    else
-    {
-        errs() << "Taint config file does NOT exist.\n";
-        return false;
-    }
-}
-
-void PointerAnalysis::parseTaintConfig()
-{
-    // Load the taint configuration from taint_config.json
-    std::ifstream configFile(taintJsonFile);
-    if (configFile.is_open())
-    {
-        json config;
-        configFile >> config;
-
-        // Parse the "tagged_objects" array
-        for (const auto &obj : config["tagged_objects"])
-        {
-            TaggedStrings.insert(obj.get<std::string>());
-        }
-    }
-    else
-    {
-        errs() << "Warning: Could not open taint_config.json.\n";
-    }
-
-    if (DebugMode)
-    {
-        errs() << "Parsed TaggedStrings contents:\n";
-        for (const auto &tag : TaggedStrings)
-        {
-            errs() << "  - " << tag << "\n";
-        }
-    }
-}
-
-void PointerAnalysis::getPtrsPTSIncludeTaintedObjects()
-{
-    TaintedObjectToPointersMap.clear(); // Clear the result map before populating it
-
-    errs() << "Tainted Objects (not printing full LLVM IRs):\n";
-    for (const auto &taggedObject : TaintedObjects)
-    {
-        // Convert to a string for printing
-        std::string taggedObjectStr;
-        llvm::raw_string_ostream rso(taggedObjectStr);
-        taggedObject->printAsOperand(rso, false);
-        rso.flush();
-
-        // Print the tainted object
-        errs() << "  - " << taggedObjectStr << "\n";
-    }
-
-    errs() << "Starting to get pointers that point to tainted objects.\n";
-    // Iterate through the points-to map
-    for (const auto &entry : pointsToMap)
-    {
-        Node *ptr = entry.first;
-        auto &targets = entry.second;
-
-        if (DebugMode)
-            errs() << "Pointer: " << *ptr << "\n";
-
-        for (Node *target : targets)
-        {
-            if (DebugMode)
-                errs() << "  -> Target: " << target << "\n";
-
-            // Check if the target is a tainted object
-            if (TaintedObjects.find(target->value) != TaintedObjects.end())
-            {
-                if (DebugMode)
-                    errs() << "    -> Found tainted object. \n";
-
-                // Add the pointer to the result map under the tainted object
-                TaintedObjectToPointersMap[target].insert(entry.first);
-            }
-        }
-    }
-    errs() << "Finished getting pointers that point to tainted objects.\n";
+    return true;
 }
 
 const PointerAnalysis::PointsToMapTy &PointerAnalysis::getPointsToMap() const
@@ -904,32 +752,3 @@ void PointerAnalysis::printPointsToMap(std::ofstream &outFile) const
     }
 }
 
-void PointerAnalysis::printTaintedObjects(std::ofstream &outFile) const
-{
-    outFile << "\n\n\n\nTainted Object to Pointers Map:\n";
-    const auto &taint_map = getTaintedObjectToPointersMap();
-    for (const auto &entry : taint_map)
-    {
-        Value *taintedObject = entry.first->value;
-        const auto &pointers = entry.second;
-
-        outFile << "Tainted Object: ";
-        {
-            std::string taintedObjectStr;
-            llvm::raw_string_ostream rso(taintedObjectStr);
-            taintedObject->print(rso);
-            rso.flush();
-            outFile << taintedObjectStr << "\n";
-        }
-
-        for (Node *pointer : pointers)
-        {
-            outFile << "  -> Points from: ";
-            std::string pointerStr;
-            llvm::raw_string_ostream rso(pointerStr);
-            pointer->print(rso);
-            rso.flush();
-            outFile << pointerStr << "\n";
-        }
-    }
-}
