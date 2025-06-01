@@ -24,9 +24,33 @@ namespace llvm
         const llvm::Value *operator[](size_t idx) const { return values[idx]; }
         auto begin() const { return values.begin(); }
         auto end() const { return values.end(); }
+
+        void print(llvm::raw_ostream &os) const
+        {
+            os << "[";
+            for (size_t i = 0; i < values.size(); ++i)
+            {
+                os << "(" + std::to_string(i) + ") ";
+                auto ctx = values[i];
+                if (ctx)
+                    ctx->print(os);
+                else
+                    os << "null";
+                if (i < values.size() - 1)
+                    os << ", ";
+            }
+            os << "]";
+        }
     };
 
     inline Context Everywhere = Context(); // Singleton instance for context-insensitive analysis
+
+    // Overload operator<< for Node as a free function
+    inline llvm::raw_ostream &operator<<(llvm::raw_ostream &os, const llvm::Context &context)
+    {
+        context.print(os);
+        return os;
+    }
 
     struct CGNode
     {
@@ -60,27 +84,17 @@ namespace llvm
         {
             os << "[CGNode id=" << id << ", function=";
             if (function)
-                function->print(os);
+                os << function->getName();
             else
                 os << "null";
-            os << ", context=";
-            os << "[";
+            os << ", context=[";
             if (context == Everywhere)
             {
                 os << "Everywhere";
             }
             else
             {
-
-                for (auto it = context.begin(); it != context.end(); ++it)
-                {
-                    if (*it)
-                        (*it)->print(os);
-                    else
-                        os << "null";
-                    if (std::next(it) != context.end())
-                        os << ", ";
-                }
+                context.print(os);
             }
             os << "]";
             os << "]";
@@ -166,7 +180,6 @@ namespace llvm
         using Node2EdgeSet = std::unordered_map<int, CallEdgeSet>;
 
         CGNode getOrCreateNode(llvm::Function *func, Context ctx = Everywhere);
-        void createNodeAndAddEdge(llvm::Function *caller, llvm::Function *callee);
 
         // Add an edge from caller to callee
         void addEdge(CGNode caller, CGNode callee)
@@ -213,6 +226,8 @@ namespace llvm
         auto begin() const { return graph_.begin(); }
         auto end() const { return graph_.end(); }
 
+        void printCG(std::ofstream &outFile) const;
+
         void clear()
         {
             graph_.clear();
@@ -223,4 +238,5 @@ namespace llvm
     private:
         Node2EdgeSet graph_;
     };
+
 } // namespace llvm

@@ -5,6 +5,7 @@
 #include "llvm/IR/Type.h"
 #include "llvm/Support/raw_ostream.h"
 #include "llvm/IR/Instructions.h"
+#include "llvm/IR/InstVisitor.h"
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
@@ -76,7 +77,6 @@ namespace llvm
         return os;
     }
 
-    // Forward declare constraint types for use in class
     enum ConstraintType
     {
         Assign,
@@ -91,7 +91,7 @@ namespace llvm
         Node *dst; // Destination value
     };
 
-    class PointerAnalysis
+    class PointerAnalysis : public InstVisitor<PointerAnalysis>
     {
     public:
         // Debug flag to enable or disable debugging output
@@ -99,14 +99,9 @@ namespace llvm
 
         using PointsToMapTy = std::unordered_map<Node *, std::unordered_set<Node *>>;
 
-        void analyze(Module &M);
+        virtual void analyze(Module &M);
         const PointsToMapTy &getPointsToMap() const;
         const CallGraph &getCallGraph() const { return callGraph; }
-        const std::unordered_map<Node *, std::unordered_set<Node *>> getTaintedObjectToPointersMap() const
-        {
-            return TaintedObjectToPointersMap;
-        }
-
         const std::unordered_set<Function *> &getVisitedFunctions() const
         {
             return Visited;
@@ -118,7 +113,7 @@ namespace llvm
 
         void clear()
         {
-            PointsToMap.clear();
+            pointsToMap.clear();
             Visited.clear();
             Worklist.clear();
             FunctionWorklist.clear();
@@ -134,52 +129,55 @@ namespace llvm
         // Make getOrCreateNode public for channel semantics
         Node *getOrCreateNode(llvm::Value *value, Context context = Everywhere); // create or find node: ctx == Everywhere
 
+        virtual Context getContext(Context context = Everywhere, const Value *newCallSite = nullptr);
+        virtual void processInstruction(Instruction &I, CGNode *cgnode);
+
+        // Visitor methods
+        void visitStoreInst(StoreInst &I);
+        void visitLoadInst(LoadInst &I);
+        virtual void visitAllocaInst(AllocaInst &I);
+        void visitBitCastInst(BitCastInst &I);
+        void visitGetElementPtrInst(GetElementPtrInst &I);
+        void visitPHINode(PHINode &I);
+        void visitAtomicRMWInst(AtomicRMWInst &I);
+        void visitAtomicCmpXchgInst(AtomicCmpXchgInst &I);
+        virtual void visitInvokeInst(InvokeInst &I);
+        virtual void visitCallInst(CallInst &I);
+        void visitInstruction(Instruction &I); // fallback
+
+        void printPointsToMap(std::ofstream &os) const;
+
     protected:
         int nextNodeId = 0;     // Monotonically increasing node ID
         llvm::Function *mainFn; // Real main function, not the one "main" for rust
 
-        PointsToMapTy PointsToMap;
-        llvm::CallGraph callGraph;                      // Call graph to track caller-callee relationships
-        std::unordered_set<Function *> Visited;         // visited functions
-        std::unordered_map<Function *, int> VisitCount; // Track the number of visits for each function
-        std::vector<Function *> FunctionWorklist;       // Worklist for new functions to visit
+        PointsToMapTy pointsToMap;
+        llvm::CallGraph callGraph;                  // Call graph to track caller-callee relationships
+        std::unordered_set<Function *> Visited;     // visited functions
+        std::unordered_map<CGNode, int> VisitCount; // Track the number of visits for each function/cgnode
+        std::vector<CGNode> FunctionWorklist;       // Worklist for new functions (with context) to visit
 
         std::unordered_map<std::pair<llvm::Value *, Context>, Node *> ValueContextToNodeMap; // Map to track Value and context pairs to Node
 
-        void processInstruction(Instruction &I, Context context = Everywhere);
+        void AddToFunctionWorklist(CGNode *callee);
+        void processVtable(GlobalVariable &GV);
+        virtual void processGlobalVar(GlobalVariable &GV);
+        void resolveVtable(Value *vtable);
+        void visitFunction(CGNode *cgnode);
+
+        // used to track the current context and CGNode during analysis
+        CGNode *CurrentCGNode = nullptr;
+        Context CurrentContext;
+
         void solveConstraints();
 
-    private:
         std::string inputDir;          // Directory containing the JSON file
-        std::string taintJsonFile;     // JSON file name
         std::string outputFile;        // Output file name
         bool parseInputDir(Module &M); // Parse the input directory from the module
+        bool parseOutputDir(Module &M); // Parse the output file path from the module
 
         llvm::Function *parseMainFn(Module &M); // Parse the main function from the module
-        void onthefly();                        // On-the-fly analysis
-
-        std::unordered_set<std::string> TaggedStrings;                                     // tagged objects from json
-        std::unordered_set<Value *> TaintedObjects;                                        // tainted objects from LLVM IR
-        std::unordered_map<Node *, std::unordered_set<Node *>> TaintedObjectToPointersMap; // Map to track tainted objects and the pointers which point to them
-        void parseTaintConfig();
-        void processGlobalVar(GlobalVariable &GV);
-        void getPtrsPTSIncludeTaintedObjects();
-
-        void AddToFunctionWorklist(Function *callee);
-        void processVtable(GlobalVariable &GV);
-        void resolveVtable(Value *vtable);
-        void visitFunction(Function *F, Context context = Everywhere);
-
-        void handleStore(StoreInst *SI, Context context = Everywhere);
-        void handleLoad(LoadInst *LI, Context context = Everywhere);
-        void handleAlloca(AllocaInst *AI, Context context = Everywhere);
-        void handleBitCast(BitCastInst *BC, Context context = Everywhere);
-        void handleGEP(GetElementPtrInst *GEP, Context context = Everywhere);
-        void handlePHINode(PHINode *PN, Context context = Everywhere);
-        void handleAtomicRMW(AtomicRMWInst *ARMW, Context context = Everywhere);
-        void handleAtomicCmpXchg(AtomicCmpXchgInst *ACX, Context context = Everywhere);
-        void handleInvokeInst(InvokeInst *II, Instruction &I, Context context = Everywhere);
-        void handleCallInst(CallInst *CI, Instruction &I, Context context = Everywhere);
+        void onthefly(Module &M);               // On-the-fly analysis
         
         // Channel-specific analysis methods
         void analyzeChannelOperations();

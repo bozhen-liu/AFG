@@ -18,6 +18,8 @@ add_library(PointerAnalysisPass MODULE
   src/KCallsitePointerAnalysis.cpp
   src/CallGraph.cpp
   src/ChannelSemantics.cpp
+  src/OriginPointerAnalysis.cpp
+  src/Flags.cpp
 )
 
 # Link against LLVM libraries and nlohmann_json
