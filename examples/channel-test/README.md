@@ -46,9 +46,9 @@ struct ChannelEndpoint {
 
 ```cpp
 struct ChannelOperation {
-    enum OpType { SEND, RECV, CHANNEL_CREATE };
+    enum ChannelOpType { SEND, RECV, CHANNEL_CREATE };
 
-    OpType operation;             // Type of operation
+    ChannelOpType operation;             // Type of operation
     llvm::Instruction* instruction; // The LLVM instruction
     ChannelEndpoint* endpoint;    // Associated endpoint
     llvm::Value* data_value;      // Data being sent/received

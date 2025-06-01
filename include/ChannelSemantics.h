@@ -31,14 +31,14 @@ struct ChannelEndpoint {
 
 // Represents a channel operation (send/recv)
 struct ChannelOperation {
-    enum OpType { SEND, RECV, CHANNEL_CREATE };
+    enum ChannelOpType { SEND, RECV, CHANNEL_CREATE };
     
-    OpType operation;
+    ChannelOpType operation;
     llvm::Instruction* instruction;  // The call instruction
     ChannelEndpoint* endpoint;       // Associated endpoint
     llvm::Value* data_value;         // Data being sent/received (null for recv)
     
-    ChannelOperation(OpType op, llvm::Instruction* inst, ChannelEndpoint* ep, llvm::Value* data = nullptr)
+    ChannelOperation(ChannelOpType op, llvm::Instruction* inst, ChannelEndpoint* ep, llvm::Value* data = nullptr)
         : operation(op), instruction(inst), endpoint(ep), data_value(data) {}
 };
 
