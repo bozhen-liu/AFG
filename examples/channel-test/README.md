@@ -4,6 +4,12 @@
 
 This document describes the implementation of explicit channel semantics modeling in the AFG (Access Flow Guard) pointer analysis framework. This enhancement addresses the limitation where channels (like `mpsc::Sender` and `mpsc::Receiver`) were treated as regular pointer types without understanding their special communication semantics.
 
+### Recent Improvements
+
+- **Precise Operation Detection**: Replaced conservative substring matching with function name demangling for exact `mpsc` operation identification
+- **Eliminated False Positives**: No longer incorrectly identifies non-channel functions (e.g., `MyOwnStructure::send()`) as channel operations
+- **Fixed Channel Duplication**: Prevents creating duplicate ChannelInfo instances for the same channel creation instruction
+
 ## Problem Statement
 
 ### Before Channel Semantics Modeling
@@ -29,16 +35,15 @@ let received = rx.recv().await.unwrap(); // Should be tainted but wasn't detecte
 
 ### Key Components
 
-#### 1. Channel Endpoint Representation (`ChannelEndpoint`)
+#### 1. Channel Instance Representation (`ChannelInfo`)
 
 ```cpp
-struct ChannelEndpoint {
-    enum Type { SENDER, RECEIVER };
-
-    Type type;                    // SENDER or RECEIVER
-    llvm::Value* endpoint_value;  // The sender/receiver value
-    llvm::Value* channel_id;      // Unique identifier for the channel pair
-    llvm::Type* data_type;        // Type of data being transmitted
+struct ChannelInfo {
+    llvm::Value* channel_id;        // Unique identifier for the channel (creation call)
+    llvm::Value* sender_value;      // The sender endpoint value
+    llvm::Value* receiver_value;    // The receiver endpoint value
+    llvm::Type* data_type;          // Type of data being transmitted
+    llvm::Instruction* creation_call; // The channel creation instruction
 };
 ```
 
@@ -48,10 +53,11 @@ struct ChannelEndpoint {
 struct ChannelOperation {
     enum ChannelOpType { SEND, RECV, CHANNEL_CREATE };
 
-    ChannelOpType operation;             // Type of operation
-    llvm::Instruction* instruction; // The LLVM instruction
-    ChannelEndpoint* endpoint;    // Associated endpoint
-    llvm::Value* data_value;      // Data being sent/received
+    ChannelOpType operation;         // Type of operation
+    llvm::Instruction* instruction;  // The LLVM instruction
+    ChannelInfo* channel_info;       // Associated channel instance
+    llvm::Value* data_value;         // Data being sent/received
+    bool is_sender_operation;        // true for send operations, false for recv operations
 };
 ```
 
@@ -60,29 +66,83 @@ struct ChannelOperation {
 The main class that:
 
 - Identifies channel operations in LLVM IR
-- Tracks channel endpoint relationships
+- Tracks complete channel instances
 - Applies channel-specific constraints to pointer analysis
 
 ## Implementation Details
 
 ### Channel Operation Detection
 
-The system detects channel operations by analyzing function names in LLVM IR:
+The system detects channel operations by analyzing demangled function names in LLVM IR to ensure precise identification of `mpsc` operations:
 
 ```cpp
+// Helper function to get demangled function name without hash suffix
+static std::string getDemangledFunctionName(llvm::Function* func) {
+    if (!func) return "";
+
+    std::string mangledName = func->getName().str();
+    std::string demangled = llvm::demangle(mangledName);
+
+    // Remove hash suffix: keep up to the last "::"
+    size_t last_colon = demangled.rfind("::");
+    if (last_colon != std::string::npos) {
+        demangled = demangled.substr(0, last_colon);
+    }
+
+    return demangled;
+}
+
 bool ChannelSemantics::isSendCall(llvm::CallInst* call) {
     Function* func = call->getCalledFunction();
     if (!func) return false;
 
-    std::string funcName = func->getName().str();
+    std::string demangledName = getDemangledFunctionName(func);
 
-    // Look for send operation patterns
-    return (funcName.find("send") != std::string::npos ||
-            funcName.find("Send") != std::string::npos) &&
-           (funcName.find("Sender") != std::string::npos ||
-            funcName.find("mpsc") != std::string::npos);
+    // Check for exact mpsc sender functions
+    return (demangledName == "std::sync::mpsc::Sender::send" ||
+            demangledName == "std::sync::mpsc::SyncSender::send" ||
+            demangledName == "std::sync::mpsc::SyncSender::try_send" ||
+            demangledName == "tokio::sync::mpsc::Sender::send" ||
+            demangledName == "tokio::sync::mpsc::UnboundedSender::send" ||
+            // Also check for test/mock versions without full std path
+            demangledName == "mpsc::Sender::send");
 }
 ```
+
+#### Supported Channel Operations
+
+- **Channel Creation**: `std::sync::mpsc::channel`, `std::sync::mpsc::sync_channel`, `tokio::sync::mpsc::channel`
+- **Send Operations**: `Sender::send`, `SyncSender::send`, `SyncSender::try_send`, `UnboundedSender::send`
+- **Receive Operations**: `Receiver::recv`, `Receiver::try_recv`, `Receiver::recv_timeout`, `UnboundedReceiver::recv`
+
+### Channel Creation and Duplication Prevention
+
+The system now properly handles duplicate channel creation calls by checking if a ChannelInfo instance already exists for a given channel creation instruction:
+
+```cpp
+ChannelInfo* ChannelSemantics::createChannelInfo(llvm::CallInst* channel_create) {
+    // Check if we've already processed this channel creation
+    for (ChannelInfo* existing : channels) {
+        if (existing->channel_id == channel_create) {
+            return existing;  // Return existing channel info
+        }
+    }
+
+    // Create new channel info only if we haven't seen this channel_create before
+    ChannelInfo* channel_info = new ChannelInfo(
+        channel_create,  // channel_id
+        nullptr,         // sender_value (resolved during send/recv operations)
+        nullptr,         // receiver_value (resolved during send/recv operations)
+        nullptr,         // data_type (determined during operations)
+        channel_create   // creation_call
+    );
+
+    channels.push_back(channel_info);
+    return channel_info;
+}
+```
+
+This ensures that multiple calls to `createChannelInfo` with the same channel creation instruction will return the same ChannelInfo instance, preventing unnecessary duplication.
 
 ### Data Flow Modeling
 
@@ -92,14 +152,13 @@ When a send operation is detected, the system creates constraints that model dat
 void ChannelSemantics::applyChannelConstraints(PointerAnalysis* analysis) {
     for (ChannelOperation* op : channel_operations) {
         if (op->operation == ChannelOperation::SEND) {
-            ChannelEndpoint* sender_endpoint = op->endpoint;
-            ChannelEndpoint* receiver_endpoint = getCorrespondingEndpoint(sender_endpoint);
+            ChannelInfo* channel_info = op->channel_info;
 
-            if (receiver_endpoint && op->data_value) {
-                // Find all receive operations on the corresponding endpoint
+            if (channel_info && op->data_value) {
+                // Find all receive operations on the same channel
                 for (ChannelOperation* recv_op : channel_operations) {
                     if (recv_op->operation == ChannelOperation::RECV &&
-                        recv_op->endpoint == receiver_endpoint) {
+                        recv_op->channel_info == channel_info) {
 
                         // Create constraint: sent_data -> received_data
                         Node* sendNode = analysis->getOrCreateNode(op->data_value);
@@ -118,10 +177,30 @@ void ChannelSemantics::applyChannelConstraints(PointerAnalysis* analysis) {
 
 The channel semantics are integrated into the main pointer analysis workflow:
 
-1. **Detection Phase**: During `handleCallInst`, channel operations are detected and recorded
-2. **Analysis Phase**: After main pointer analysis, `analyzeChannelOperations()` processes channel relationships
-3. **Constraint Integration**: `integrateChannelConstraints()` applies channel-specific constraints
-4. **Re-solving**: Constraints are re-solved with the new channel constraints
+1. **Detection Phase**: During `visitCallInst`, channel operations are detected and recorded in real-time
+2. **Integrated Solving Phase**: Channel constraints are generated and applied **within** the main `solveConstraints()` loop alongside regular pointer analysis constraints
+3. **Iterative Refinement**: The constraint solver continues until both regular and channel constraints reach a fixed point
+
+#### Implementation Details
+
+The integration works as follows:
+
+```cpp
+void PointerAnalysis::solveConstraints()
+{
+    // Solve regular constraints first
+    processConstraintsUntilFixedPoint();
+
+    // Integrate channel analysis into the constraint solving phase
+    analyzeChannelOperations();
+
+    // Integrate channel constraints once after regular constraints stabilize
+    if (integrateChannelConstraints()) {
+        // Re-solve with channel constraints
+        processConstraintsUntilFixedPoint();
+    }
+}
+```
 
 ## Benefits
 
@@ -198,17 +277,19 @@ This will generate `libPointerAnalysisPass.so` in the project root directory.
 
 ```
 === Channel Semantics Analysis ===
-Channel Endpoints (2):
-  RECEIVER - Value: %receiver = extractvalue { ptr, ptr } %channel_result, 1
-  SENDER - Value: %sender = extractvalue { ptr, ptr } %channel_result, 0
+Channel Instances (1):
+  Channel ID: %channel_result = call { ptr, ptr } @_ZN4mpsc7channel...
+    Sender: %sender = extractvalue { ptr, ptr } %channel_result, 0
+    Receiver: %receiver = extractvalue { ptr, ptr } %channel_result, 1
 
 Channel Operations (3):
   CREATE - Instruction: %channel_result = call { ptr, ptr } @_ZN4mpsc7channel...
   SEND - Instruction: %send_result = call i32 @_ZN4mpsc6Sender4send...
   RECV - Instruction: %recv_result = call ptr @_ZN4mpsc8Receiver4recv...
 
-Channel Pairs (1):
-  Channel ID: %channel_result = call { ptr, ptr } @_ZN4mpsc7channel...
+Channel Mappings (2):
+  Value: %sender -> Channel ID: %channel_result = call { ptr, ptr } @_ZN4mpsc7channel...
+  Value: %receiver -> Channel ID: %channel_result = call { ptr, ptr } @_ZN4mpsc7channel...
 ```
 
 #### Test 2: Baseline Test (No Channels)
@@ -228,9 +309,9 @@ Channel Pairs (1):
 
 ```
 === Channel Semantics Analysis ===
-Channel Endpoints (0):
+Channel Instances (0):
 Channel Operations (0):
-Channel Pairs (0):
+Channel Mappings (0):
 ```
 
 #### Test 3: Rust Channel Example (Optional)
@@ -256,11 +337,14 @@ cd ../../build
 ### Verification Checklist
 
 - [x] Build completes successfully with `make`
-
 - [x] `libPointerAnalysisPass.so` is generated in build directory
-- [x] Manual channel test shows detected endpoints and operations
+- [x] Manual channel test shows detected instances and operations
 - [x] Baseline test shows no channel operations (as expected)
 - [x] No compilation errors or warnings
+- [x] Precise channel detection using function name demangling
+- [x] No false positives for non-mpsc functions (e.g., `MyOwnStructure::send()`)
+- [x] Support for both `std::sync::mpsc` and `tokio::sync::mpsc` variants
+- [x] Fixed channel duplication - no duplicate ChannelInfo instances created
 
 ## Usage Example
 

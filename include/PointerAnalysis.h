@@ -170,6 +170,7 @@ namespace llvm
         Context CurrentContext;
 
         void solveConstraints();
+        void processConstraintsUntilFixedPoint();
 
         std::string inputDir;          // Directory containing the JSON file
         std::string outputFile;        // Output file name
@@ -181,7 +182,7 @@ namespace llvm
         
         // Channel-specific analysis methods
         void analyzeChannelOperations();
-        void integrateChannelConstraints();
+        bool integrateChannelConstraints();
     };
 
 } // namespace llvm

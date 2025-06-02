@@ -30,12 +30,6 @@ void PointerAnalysis::analyze(Module &M)
     onthefly(M);
 
     errs() << "Pointer analysis completed.\n";
-
-    // Analyze channel operations after main analysis
-    analyzeChannelOperations();
-    
-    // Integrate channel constraints
-    integrateChannelConstraints();
 }
 
 llvm::Function *PointerAnalysis::parseMainFn(Module &M)
@@ -635,10 +629,27 @@ void PointerAnalysis::visitInstruction(Instruction &I)
 
 void PointerAnalysis::solveConstraints()
 {
+    // Solve regular constraints first
+    processConstraintsUntilFixedPoint();
+    
+    // Integrate channel analysis into the constraint solving phase
+    analyzeChannelOperations();
+    
+    // Integrate channel constraints once after regular constraints stabilize
+    if (integrateChannelConstraints()) {
+        // Re-solve with channel constraints
+        processConstraintsUntilFixedPoint();
+    }
+}
+
+void PointerAnalysis::processConstraintsUntilFixedPoint()
+{
     bool changed = true;
     while (changed)
     {
         changed = false;
+        
+        // Process all constraints in the worklist
         for (const auto &constraint : Worklist)
         {
             if (!constraint.dst)
@@ -757,43 +768,39 @@ const void PointerAnalysis::printStatistics()
 
 void PointerAnalysis::analyzeChannelOperations()
 {
-    if (DebugMode) {
-        errs() << "=== Analyzing Channel Operations ===\n";
-    }
-    
-    // The channel operations have already been collected during the main analysis
-    // in handleCallInst. Here we can perform additional analysis if needed.
-    
-    // For example, we could validate that channels are used correctly:
-    // - Every send has a corresponding receive
-    // - Channel endpoints are properly paired
-    // - No use-after-close violations
+    // Channel operations have already been collected during the main analysis
+    // in visitCallInst. This function now only validates and reports.
     
     if (DebugMode) {
+        errs() << "=== Channel Operations Summary ===\n";
         errs() << "Found " << channelSemantics.channel_operations.size() 
                << " channel operations\n";
-        errs() << "Found " << channelSemantics.endpoint_map.size() 
-               << " channel endpoints\n";
-        errs() << "Found " << channelSemantics.channel_pairs.size() 
-               << " channel pairs\n";
+        errs() << "Found " << channelSemantics.channel_map.size() 
+               << " channel mappings\n";
+        errs() << "Found " << channelSemantics.channels.size() 
+               << " channel instances\n";
     }
 }
 
-void PointerAnalysis::integrateChannelConstraints()
+bool PointerAnalysis::integrateChannelConstraints()
 {
-    if (DebugMode) {
+    if (DebugMode && !channelSemantics.channel_operations.empty()) {
         errs() << "=== Integrating Channel Constraints ===\n";
     }
     
     // Apply channel-specific constraints to the pointer analysis
+    // This function now returns whether any new constraints were added
+    size_t oldWorklistSize = Worklist.size();
     channelSemantics.applyChannelConstraints(this);
     
-    // Re-solve constraints with the new channel constraints
-    solveConstraints();
+    bool constraintsAdded = (Worklist.size() > oldWorklistSize);
     
-    if (DebugMode) {
-        errs() << "Channel constraints integrated and constraints re-solved\n";
+    if (DebugMode && constraintsAdded) {
+        errs() << "Added " << (Worklist.size() - oldWorklistSize) 
+               << " channel constraints to worklist\n";
     }
+    
+    return constraintsAdded;
 }
 // Iterate through the points-to map and print the results
 void PointerAnalysis::printPointsToMap(std::ofstream &outFile) const

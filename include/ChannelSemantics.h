@@ -11,21 +11,22 @@
 
 namespace llvm {
 
-// Represents a channel endpoint (sender or receiver)
-struct ChannelEndpoint {
-    enum Type { SENDER, RECEIVER };
+// Represents a complete channel instance including creation and both endpoints
+struct ChannelInfo {
+    llvm::Value* channel_id;        // Unique identifier for the channel (creation call)
+    llvm::Value* sender_value;      // The sender endpoint value
+    llvm::Value* receiver_value;    // The receiver endpoint value
+    llvm::Type* data_type;          // Type of data being transmitted
+    llvm::Instruction* creation_call; // The channel creation instruction
     
-    Type type;
-    llvm::Value* endpoint_value;  // The sender/receiver value
-    llvm::Value* channel_id;      // Unique identifier for the channel pair
-    llvm::Type* data_type;        // Type of data being transmitted
+    ChannelInfo(llvm::Value* channel, llvm::Value* sender, llvm::Value* receiver, 
+                llvm::Type* dtype, llvm::Instruction* create_call)
+        : channel_id(channel), sender_value(sender), receiver_value(receiver), 
+          data_type(dtype), creation_call(create_call) {}
     
-    ChannelEndpoint(Type t, llvm::Value* endpoint, llvm::Value* channel, llvm::Type* dtype)
-        : type(t), endpoint_value(endpoint), channel_id(channel), data_type(dtype) {}
-    
-    bool operator==(const ChannelEndpoint& other) const {
-        return type == other.type && endpoint_value == other.endpoint_value && 
-               channel_id == other.channel_id;
+    bool operator==(const ChannelInfo& other) const {
+        return channel_id == other.channel_id && sender_value == other.sender_value && 
+               receiver_value == other.receiver_value;
     }
 };
 
@@ -35,23 +36,26 @@ struct ChannelOperation {
     
     ChannelOpType operation;
     llvm::Instruction* instruction;  // The call instruction
-    ChannelEndpoint* endpoint;       // Associated endpoint
+    ChannelInfo* channel_info;       // Associated channel instance
     llvm::Value* data_value;         // Data being sent/received (null for recv)
+    bool is_sender_operation;        // true for send operations, false for recv operations
     
-    ChannelOperation(ChannelOpType op, llvm::Instruction* inst, ChannelEndpoint* ep, llvm::Value* data = nullptr)
-        : operation(op), instruction(inst), endpoint(ep), data_value(data) {}
+    ChannelOperation(ChannelOpType op, llvm::Instruction* inst, ChannelInfo* channel, 
+                     llvm::Value* data = nullptr, bool is_sender = false)
+        : operation(op), instruction(inst), channel_info(channel), 
+          data_value(data), is_sender_operation(is_sender) {}
 };
 
 // Channel semantics analyzer
 class ChannelSemantics {
 public:
     // Maps to track channel relationships
-    std::unordered_map<llvm::Value*, ChannelEndpoint*> endpoint_map;
-    std::unordered_map<llvm::Value*, std::pair<ChannelEndpoint*, ChannelEndpoint*>> channel_pairs;
+    std::unordered_map<llvm::Value*, ChannelInfo*> channel_map; // Maps values to their channel info
+    std::vector<ChannelInfo*> channels;                        // All channel instances
     std::vector<ChannelOperation*> channel_operations;
     
-    // Identify if a value is a channel endpoint
-    bool isChannelEndpoint(llvm::Value* value);
+    // Identify if a value is part of a channel
+    bool isChannelValue(llvm::Value* value);
     
     // Identify if a call is a channel operation
     bool isChannelOperation(llvm::CallInst* call);
@@ -59,11 +63,14 @@ public:
     // Extract channel semantics from a call instruction
     ChannelOperation* analyzeChannelCall(llvm::CallInst* call);
     
-    // Create channel endpoint from channel creation
-    std::pair<ChannelEndpoint*, ChannelEndpoint*> createChannelPair(llvm::CallInst* channel_create);
+    // Create channel info from channel creation
+    ChannelInfo* createChannelInfo(llvm::CallInst* channel_create);
     
-    // Get the corresponding endpoint for a channel endpoint
-    ChannelEndpoint* getCorrespondingEndpoint(ChannelEndpoint* endpoint);
+    // Get the channel info for a given value
+    ChannelInfo* getChannelInfo(llvm::Value* value);
+    
+    // Find channel info by tracing back from a value (e.g., extractvalue instruction)
+    ChannelInfo* findChannelInfoForValue(llvm::Value* value);
     
     // Apply channel-specific constraints to pointer analysis
     void applyChannelConstraints(class PointerAnalysis* analysis);
