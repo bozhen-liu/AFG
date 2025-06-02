@@ -79,8 +79,9 @@ llvm::Function *PointerAnalysis::parseMainFn(Module &M)
 
     if (!realMainFn)
     {
-        errs() << "No real main function found.\n";
-        return nullptr;
+        // Add a fallback mechanism that returns the main function itself when the pattern matching fails.
+        errs() << "No real main function found through pattern matching, using main function directly.\n";
+        return mainFn; // Fallback to the main function itself
     }
     else
     {
