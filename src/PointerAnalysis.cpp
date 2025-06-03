@@ -79,8 +79,9 @@ llvm::Function *PointerAnalysis::parseMainFn(Module &M)
 
     if (!realMainFn)
     {
-        errs() << "No real main function found.\n";
-        return nullptr;
+        // Add a fallback mechanism that returns the main function itself when the pattern matching fails.
+        errs() << "No real main function found through pattern matching, using main function directly.\n";
+        return mainFn; // Fallback to the main function itself
     }
     else
     {
@@ -203,7 +204,7 @@ Node *PointerAnalysis::getOrCreateNode(llvm::Value *value, Context context)
     return node;
 }
 
-Context PointerAnalysis::getContext(Context context = Everywhere, const Value *newCallSite)
+Context PointerAnalysis::getContext(Context context, const Value *newCallSite)
 {
     return Everywhere; // Default context is Everywhere
 }
@@ -555,7 +556,33 @@ void PointerAnalysis::visitInvokeInst(InvokeInst &II)
 
 void PointerAnalysis::visitCallInst(CallInst &CI)
 {
+    Function *caller = CI.getFunction(); // Get the caller function
     Function *calledFn = CI.getCalledFunction();
+    
+    // Check if this is a channel operation first
+    if (channelSemantics.isChannelOperation(&CI)) {
+        ChannelOperation* channelOp = channelSemantics.analyzeChannelCall(&CI);
+        if (channelOp) {
+            channelSemantics.channel_operations.push_back(channelOp);
+            
+            if (DebugMode) {
+                errs() << "Detected channel operation: ";
+                switch (channelOp->operation) {
+                    case ChannelOperation::SEND:
+                        errs() << "SEND";
+                        break;
+                    case ChannelOperation::RECV:
+                        errs() << "RECV";
+                        break;
+                    case ChannelOperation::CHANNEL_CREATE:
+                        errs() << "CREATE";
+                        break;
+                }
+                errs() << " in function: " << caller->getName() << "\n";
+            }
+        }
+    }
+    
     if (calledFn)
     {
         // Add to the call graph
@@ -603,10 +630,27 @@ void PointerAnalysis::visitInstruction(Instruction &I)
 
 void PointerAnalysis::solveConstraints()
 {
+    // Solve regular constraints first
+    processConstraintsUntilFixedPoint();
+    
+    // Integrate channel analysis into the constraint solving phase
+    analyzeChannelOperations();
+    
+    // Integrate channel constraints once after regular constraints stabilize
+    if (integrateChannelConstraints()) {
+        // Re-solve with channel constraints
+        processConstraintsUntilFixedPoint();
+    }
+}
+
+void PointerAnalysis::processConstraintsUntilFixedPoint()
+{
     bool changed = true;
     while (changed)
     {
         changed = false;
+        
+        // Process all constraints in the worklist
         for (const auto &constraint : Worklist)
         {
             if (!constraint.dst)
@@ -716,9 +760,49 @@ const void PointerAnalysis::printStatistics()
     errs() << "PointsToMap: " << numNodes << " nodes, " << numEdges << " edges\n";
     errs() << "CallGraph: " << callGraph.numNodes() << " nodes, " << callGraph.numEdges() << " edges\n";
     errs() << "Visited functions: " << numVisitedFunctions << "\n";
+    
+    // Print channel semantics statistics
+    channelSemantics.printChannelInfo(errs());
+    
     errs() << "==================================\n";
 }
 
+void PointerAnalysis::analyzeChannelOperations()
+{
+    // Channel operations have already been collected during the main analysis
+    // in visitCallInst. This function now only validates and reports.
+    
+    if (DebugMode) {
+        errs() << "=== Channel Operations Summary ===\n";
+        errs() << "Found " << channelSemantics.channel_operations.size() 
+               << " channel operations\n";
+        errs() << "Found " << channelSemantics.channel_map.size() 
+               << " channel mappings\n";
+        errs() << "Found " << channelSemantics.channels.size() 
+               << " channel instances\n";
+    }
+}
+
+bool PointerAnalysis::integrateChannelConstraints()
+{
+    if (DebugMode && !channelSemantics.channel_operations.empty()) {
+        errs() << "=== Integrating Channel Constraints ===\n";
+    }
+    
+    // Apply channel-specific constraints to the pointer analysis
+    // This function now returns whether any new constraints were added
+    size_t oldWorklistSize = Worklist.size();
+    channelSemantics.applyChannelConstraints(this);
+    
+    bool constraintsAdded = (Worklist.size() > oldWorklistSize);
+    
+    if (DebugMode && constraintsAdded) {
+        errs() << "Added " << (Worklist.size() - oldWorklistSize) 
+               << " channel constraints to worklist\n";
+    }
+    
+    return constraintsAdded;
+}
 // Iterate through the points-to map and print the results
 void PointerAnalysis::printPointsToMap(std::ofstream &outFile) const
 {
