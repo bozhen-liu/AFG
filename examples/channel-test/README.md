@@ -314,7 +314,7 @@ Channel Operations (0):
 Channel Mappings (0):
 ```
 
-#### Test 3: Rust Channel Example (Optional)
+#### TODO: Test 3: Rust Channel Example (Optional)
 
 If you want to test with the Rust source code:
 
