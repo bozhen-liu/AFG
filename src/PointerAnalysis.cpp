@@ -255,47 +255,6 @@ void PointerAnalysis::processInstruction(Instruction &I, CGNode *cgnode)
     CurrentContext = getContext(Everywhere, &I);
     visit(I); // InstVisitor dispatches to the correct visit* method
 
-    // // regular instructions
-    // if (auto *SI = dyn_cast<StoreInst>(&I))
-    // {
-    //     handleStore(SI, context);
-    // }
-    // else if (auto *LI = dyn_cast<LoadInst>(&I))
-    // {
-    //     handleLoad(LI, context);
-    // }
-    // else if (auto *AI = dyn_cast<AllocaInst>(&I))
-    // {
-    //     handleAlloca(AI, context);
-    // }
-    // else if (auto *BC = dyn_cast<BitCastInst>(&I))
-    // {
-    //     handleBitCast(BC, context);
-    // }
-    // else if (auto *GEP = dyn_cast<GetElementPtrInst>(&I))
-    // {
-    //     handleGEP(GEP, context);
-    // }
-    // else if (auto *PN = dyn_cast<PHINode>(&I))
-    // {
-    //     handlePHINode(PN, context);
-    // }
-    // else if (auto *ARMW = dyn_cast<AtomicRMWInst>(&I))
-    // {
-    //     handleAtomicRMW(ARMW, context);
-    // }
-    // else if (auto *ACX = dyn_cast<AtomicCmpXchgInst>(&I))
-    // {
-    //     handleAtomicCmpXchg(ACX, context);
-    // }
-    // else if (auto *II = dyn_cast<InvokeInst>(&I))
-    // {
-    //     handleInvokeInst(II, I, cgnode);
-    // }
-    // else if (auto *CI = dyn_cast<CallInst>(&I))
-    // {
-    //     handleCallInst(CI, I, cgnode);
-    // }
     // // Variadic functions (e.g., printf)
     // else if (auto *VAA = dyn_cast<VAArgInst>(&I))
     // {
