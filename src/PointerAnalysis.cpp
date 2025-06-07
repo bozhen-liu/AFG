@@ -591,32 +591,10 @@ void PointerAnalysis::visitInvokeInst(InvokeInst &II)
 
 void PointerAnalysis::visitCallInst(CallInst &CI)
 {
-    Function *caller = CI.getFunction(); // Get the caller function
     Function *calledFn = CI.getCalledFunction();
     
-    // Check if this is a channel operation first
-    if (channelSemantics.isChannelOperation(&CI)) {
-        ChannelOperation* channelOp = channelSemantics.analyzeChannelCall(&CI);
-        if (channelOp) {
-            channelSemantics.channel_operations.push_back(channelOp);
-            
-            if (DebugMode) {
-                errs() << "Detected channel operation: ";
-                switch (channelOp->operation) {
-                    case ChannelOperation::SEND:
-                        errs() << "SEND";
-                        break;
-                    case ChannelOperation::RECV:
-                        errs() << "RECV";
-                        break;
-                    case ChannelOperation::CHANNEL_CREATE:
-                        errs() << "CREATE";
-                        break;
-                }
-                errs() << " in function: " << caller->getName() << "\n";
-            }
-        }
-    }
+    // Handle channel operations first
+    handleChannelOperation(CI);
     
     if (calledFn)
     {
@@ -653,6 +631,34 @@ void PointerAnalysis::visitCallInst(CallInst &CI)
         // TODO: Conservative handling: assume all pointers may be affected
         if (DebugMode)
             errs() << "TODO: CallInst is InlineAsm: " << CI << "\n";
+    }
+}
+
+void PointerAnalysis::handleChannelOperation(CallInst &CI)
+{
+    // Check if this is a channel operation first
+    if (channelSemantics.isChannelOperation(&CI)) {
+        ChannelOperation* channelOp = channelSemantics.analyzeChannelCall(&CI);
+        if (channelOp) {
+            channelSemantics.channel_operations.push_back(channelOp);
+            
+            if (DebugMode) {
+                Function *caller = CI.getFunction(); // Get the caller function
+                errs() << "Detected channel operation: ";
+                switch (channelOp->operation) {
+                    case ChannelOperation::SEND:
+                        errs() << "SEND";
+                        break;
+                    case ChannelOperation::RECV:
+                        errs() << "RECV";
+                        break;
+                    case ChannelOperation::CHANNEL_CREATE:
+                        errs() << "CREATE";
+                        break;
+                }
+                errs() << " in function: " << caller->getName() << "\n";
+            }
+        }
     }
 }
 

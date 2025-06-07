@@ -183,6 +183,7 @@ namespace llvm
         // Channel-specific analysis methods
         void analyzeChannelOperations();
         bool integrateChannelConstraints();
+        void handleChannelOperation(CallInst &CI);
     };
 
 } // namespace llvm
