@@ -30,7 +30,7 @@ struct ChannelInfo {
     }
 };
 
-// Represents a channel operation (send/recv)
+// Represents a channel operation (send/recv/creation)
 struct ChannelOperation {
     enum ChannelOpType { SEND, RECV, CHANNEL_CREATE };
     
@@ -38,12 +38,11 @@ struct ChannelOperation {
     llvm::Instruction* instruction;  // The call instruction
     ChannelInfo* channel_info;       // Associated channel instance
     llvm::Value* data_value;         // Data being sent/received (null for recv)
-    bool is_sender_operation;        // true for send operations, false for recv operations
     
     ChannelOperation(ChannelOpType op, llvm::Instruction* inst, ChannelInfo* channel, 
-                     llvm::Value* data = nullptr, bool is_sender = false)
+                     llvm::Value* data = nullptr)
         : operation(op), instruction(inst), channel_info(channel), 
-          data_value(data), is_sender_operation(is_sender) {}
+          data_value(data) {}
 };
 
 // Channel semantics analyzer

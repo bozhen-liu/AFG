@@ -114,7 +114,7 @@ ChannelOperation* ChannelSemantics::analyzeChannelCall(llvm::CallInst* call) {
             }
         }
         
-        return new ChannelOperation(ChannelOperation::SEND, call, channel_info, data, true);
+        return new ChannelOperation(ChannelOperation::SEND, call, channel_info, data);
         
     } else if (isRecvCall(call)) {
         // Handle receive operation: rx.recv().await
@@ -136,7 +136,7 @@ ChannelOperation* ChannelSemantics::analyzeChannelCall(llvm::CallInst* call) {
             }
         }
         
-        return new ChannelOperation(ChannelOperation::RECV, call, channel_info, nullptr, false);
+        return new ChannelOperation(ChannelOperation::RECV, call, channel_info, nullptr);
     }
     
     return nullptr;

@@ -57,7 +57,6 @@ struct ChannelOperation {
     llvm::Instruction* instruction;  // The LLVM instruction
     ChannelInfo* channel_info;       // Associated channel instance
     llvm::Value* data_value;         // Data being sent/received
-    bool is_sender_operation;        // true for send operations, false for recv operations
 };
 ```
 
