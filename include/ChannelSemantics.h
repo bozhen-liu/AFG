@@ -4,6 +4,7 @@
 #include "llvm/IR/Value.h"
 #include "llvm/IR/Instructions.h"
 #include "llvm/Support/raw_ostream.h"
+#include "CallGraph.h"
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
@@ -18,15 +19,16 @@ struct ChannelInfo {
     llvm::Value* receiver_value;    // The receiver endpoint value
     llvm::Type* data_type;          // Type of data being transmitted
     llvm::Instruction* creation_call; // The channel creation instruction
+    Context context;                // Context for context-sensitive analysis
     
     ChannelInfo(llvm::Value* channel, llvm::Value* sender, llvm::Value* receiver, 
-                llvm::Type* dtype, llvm::Instruction* create_call)
+                llvm::Type* dtype, llvm::Instruction* create_call, Context ctx = Everywhere)
         : channel_id(channel), sender_value(sender), receiver_value(receiver), 
-          data_type(dtype), creation_call(create_call) {}
+          data_type(dtype), creation_call(create_call), context(ctx) {}
     
     bool operator==(const ChannelInfo& other) const {
         return channel_id == other.channel_id && sender_value == other.sender_value && 
-               receiver_value == other.receiver_value;
+               receiver_value == other.receiver_value && context == other.context;
     }
 };
 
@@ -60,10 +62,10 @@ public:
     bool isChannelOperation(llvm::CallInst* call);
     
     // Extract channel semantics from a call instruction
-    ChannelOperation* analyzeChannelCall(llvm::CallInst* call);
+    ChannelOperation* analyzeChannelCall(llvm::CallInst* call, Context context = Everywhere);
     
     // Create channel info from channel creation
-    ChannelInfo* createChannelInfo(llvm::CallInst* channel_create);
+    ChannelInfo* createChannelInfo(llvm::CallInst* channel_create, Context context = Everywhere);
     
     // Get the channel info for a given value
     ChannelInfo* getChannelInfo(llvm::Value* value);

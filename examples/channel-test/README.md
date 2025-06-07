@@ -44,6 +44,7 @@ struct ChannelInfo {
     llvm::Value* receiver_value;    // The receiver endpoint value
     llvm::Type* data_type;          // Type of data being transmitted
     llvm::Instruction* creation_call; // The channel creation instruction
+    Context context;                // Context for context-sensitive analysis
 };
 ```
 

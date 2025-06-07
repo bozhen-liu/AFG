@@ -80,14 +80,14 @@ bool ChannelSemantics::isRecvCall(llvm::CallInst* call) {
             demangledName == "mpsc::Receiver::recv");
 }
 
-ChannelOperation* ChannelSemantics::analyzeChannelCall(llvm::CallInst* call) {
+ChannelOperation* ChannelSemantics::analyzeChannelCall(llvm::CallInst* call, Context context) {
     if (!isChannelOperation(call)) {
         return nullptr;
     }
     
     if (isChannelCreateCall(call)) {
         // Handle channel creation: let (tx, rx) = mpsc::channel(1);
-        ChannelInfo* channel_info = createChannelInfo(call);
+        ChannelInfo* channel_info = createChannelInfo(call, context);
         
         // The channel creation call doesn't reference a specific channel info yet
         return new ChannelOperation(ChannelOperation::CHANNEL_CREATE, call, channel_info);
@@ -142,7 +142,7 @@ ChannelOperation* ChannelSemantics::analyzeChannelCall(llvm::CallInst* call) {
     return nullptr;
 }
 
-ChannelInfo* ChannelSemantics::createChannelInfo(llvm::CallInst* channel_create) {
+ChannelInfo* ChannelSemantics::createChannelInfo(llvm::CallInst* channel_create, Context context) {
     // Check if we've already processed this channel creation
     for (ChannelInfo* existing : channels) {
         if (existing->channel_id == channel_create) {
@@ -160,7 +160,8 @@ ChannelInfo* ChannelSemantics::createChannelInfo(llvm::CallInst* channel_create)
         nullptr,         // sender_value (placeholder)
         nullptr,         // receiver_value (placeholder)
         nullptr,         // data_type (will be determined later)
-        channel_create   // creation_call
+        channel_create,  // creation_call
+        context          // context
     );
     
     // Store the channel instance

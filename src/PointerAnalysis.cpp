@@ -643,7 +643,7 @@ void PointerAnalysis::handleChannelOperation(CallInst &CI)
 {
     // Check if this is a channel operation first
     if (channelSemantics.isChannelOperation(&CI)) {
-        ChannelOperation* channelOp = channelSemantics.analyzeChannelCall(&CI);
+        ChannelOperation* channelOp = channelSemantics.analyzeChannelCall(&CI, CurrentContext);
         if (channelOp) {
             channelSemantics.channel_operations.push_back(channelOp);
             
