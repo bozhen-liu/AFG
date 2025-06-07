@@ -266,8 +266,7 @@ This will generate `libPointerAnalysisPass.so` in the project root directory.
 
 ```bash
 # Test with the manual channel test case
-/opt/homebrew/Cellar/llvm@17/17.0.6/bin/opt \
-  -load-pass-plugin ./libPointerAnalysisPass.so \
+opt -load-pass-plugin ./libPointerAnalysisPass.so \
   -passes=pointer-analysis \
   -disable-output \
   ../examples/channel-test/channel-test-manual.ll
@@ -298,8 +297,7 @@ Channel Mappings (2):
 
 ```bash
 # Test with existing demo (should show no channel operations)
-/opt/homebrew/Cellar/llvm@17/17.0.6/bin/opt \
-  -load-pass-plugin ./libPointerAnalysisPass.so \
+opt -load-pass-plugin ./libPointerAnalysisPass.so \
   -passes=pointer-analysis \
   -disable-output \
   ../examples/demo/demo-r68_llvm17_map.ll
@@ -323,15 +321,34 @@ If you want to test with the Rust source code:
 ```bash
 # Compile Rust code to LLVM IR (requires Rust 1.68.0 for compatibility)
 cd ../examples/channel-test
-cargo rustc -- --emit=llvm-ir
+cargo rustc -- --emit=llvm-ir -C debuginfo=0 -C opt-level=0
 cd ../../build
 
 # Run analysis on generated IR
-/opt/homebrew/Cellar/llvm@17/17.0.6/bin/opt \
-  -load-pass-plugin ./libPointerAnalysisPass.so \
+opt -load-pass-plugin ./libPointerAnalysisPass.so \
   -passes=pointer-analysis \
   -disable-output \
   ../examples/channel-test/target/debug/deps/channel_test-*.ll
+```
+
+**Expected Output:**
+
+```
+=== PointerAnalysis Statistics ===
+PointsToMap: 6007 nodes, 24680 edges
+CallGraph: 355 nodes, 1103 edges
+Visited functions: 357
+=== Channel Semantics Analysis ===
+Channel Instances (1):
+  Channel ID:   call void @_ZN3std4sync4mpsc7channel17hd09f176f9261c9f6E(ptr sret({ { i64, ptr }, { i64, ptr } }) %_3), !dbg !1176
+    Sender: null
+    Receiver: null
+
+Channel Operations (1):
+  CREATE - Instruction:   call void @_ZN3std4sync4mpsc7channel17hd09f176f9261c9f6E(ptr sret({ { i64, ptr }, { i64, ptr } }) %_3), !dbg !1176
+
+Channel Mappings (0):
+==================================
 ```
 
 ### Verification Checklist
