@@ -158,6 +158,11 @@ void PointerAnalysis::onthefly(Module &M)
         if (DebugMode)
             errs() << "Function worklist size 2: " << FunctionWorklist.size() << "\n";
 
+        // Add channel constraint to trigger channel processing
+        if (!channelSemantics.channel_operations.empty()) {
+            Worklist.push_back({Channel, nullptr, nullptr});
+        }
+        
         // Solve constraints and discover new callees
         solveConstraints();
         if (DebugMode)
@@ -671,21 +676,6 @@ void PointerAnalysis::visitInstruction(Instruction &I)
 
 void PointerAnalysis::solveConstraints()
 {
-    // Solve regular constraints first
-    processConstraintsUntilFixedPoint();
-    
-    // Integrate channel analysis into the constraint solving phase
-    analyzeChannelOperations();
-    
-    // Integrate channel constraints once after regular constraints stabilize
-    if (integrateChannelConstraints()) {
-        // Re-solve with channel constraints
-        processConstraintsUntilFixedPoint();
-    }
-}
-
-void PointerAnalysis::processConstraintsUntilFixedPoint()
-{
     bool changed = true;
     while (changed)
     {
@@ -747,9 +737,45 @@ void PointerAnalysis::processConstraintsUntilFixedPoint()
                     }
                 }
                 break;
+                
+            case Channel:
+                if (handleChannelConstraints()) {
+                    changed = true;
+                }
+                break;
             }
         }
     }
+}
+
+bool PointerAnalysis::handleChannelConstraints()
+{
+    // Channel operations have already been collected during the main analysis
+    // in visitCallInst. This function processes and applies channel constraints.
+    
+    if (DebugMode) {
+        errs() << "=== Processing Channel Constraints ===\n";
+        errs() << "Found " << channelSemantics.channel_operations.size() 
+               << " channel operations\n";
+        errs() << "Found " << channelSemantics.channel_map.size() 
+               << " channel mappings\n";
+        errs() << "Found " << channelSemantics.channels.size() 
+               << " channel instances\n";
+    }
+    
+    // Apply channel-specific constraints to the pointer analysis
+    // This function returns whether any new constraints were added
+    size_t oldWorklistSize = Worklist.size();
+    channelSemantics.applyChannelConstraints(this);
+    
+    bool constraintsAdded = (Worklist.size() > oldWorklistSize);
+    
+    if (DebugMode && constraintsAdded) {
+        errs() << "Added " << (Worklist.size() - oldWorklistSize) 
+               << " channel constraints to worklist\n";
+    }
+    
+    return constraintsAdded;
 }
 
 bool PointerAnalysis::parseInputDir(Module &M)
@@ -808,42 +834,7 @@ const void PointerAnalysis::printStatistics()
     errs() << "==================================\n";
 }
 
-void PointerAnalysis::analyzeChannelOperations()
-{
-    // Channel operations have already been collected during the main analysis
-    // in visitCallInst. This function now only validates and reports.
-    
-    if (DebugMode) {
-        errs() << "=== Channel Operations Summary ===\n";
-        errs() << "Found " << channelSemantics.channel_operations.size() 
-               << " channel operations\n";
-        errs() << "Found " << channelSemantics.channel_map.size() 
-               << " channel mappings\n";
-        errs() << "Found " << channelSemantics.channels.size() 
-               << " channel instances\n";
-    }
-}
 
-bool PointerAnalysis::integrateChannelConstraints()
-{
-    if (DebugMode && !channelSemantics.channel_operations.empty()) {
-        errs() << "=== Integrating Channel Constraints ===\n";
-    }
-    
-    // Apply channel-specific constraints to the pointer analysis
-    // This function now returns whether any new constraints were added
-    size_t oldWorklistSize = Worklist.size();
-    channelSemantics.applyChannelConstraints(this);
-    
-    bool constraintsAdded = (Worklist.size() > oldWorklistSize);
-    
-    if (DebugMode && constraintsAdded) {
-        errs() << "Added " << (Worklist.size() - oldWorklistSize) 
-               << " channel constraints to worklist\n";
-    }
-    
-    return constraintsAdded;
-}
 // Iterate through the points-to map and print the results
 void PointerAnalysis::printPointsToMap(std::ofstream &outFile) const
 {

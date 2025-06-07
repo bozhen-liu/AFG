@@ -81,7 +81,8 @@ namespace llvm
     {
         Assign,
         Load,
-        Store
+        Store,
+        Channel // used when considering channel ops
     };
 
     struct PtrConstraint
@@ -181,9 +182,8 @@ namespace llvm
         void onthefly(Module &M);               // On-the-fly analysis
         
         // Channel-specific analysis methods
-        void analyzeChannelOperations();
-        bool integrateChannelConstraints();
         void handleChannelOperation(CallInst &CI);
+        bool handleChannelConstraints();
     };
 
 } // namespace llvm
