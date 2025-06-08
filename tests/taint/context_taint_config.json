@@ -1,0 +1,5 @@
+{
+    "tagged_objects": [
+        "%secret = alloca i32, align 4"
+    ]
+}
