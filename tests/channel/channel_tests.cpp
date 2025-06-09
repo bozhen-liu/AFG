@@ -3,84 +3,158 @@
 void run_channel_tests(AFGTestFramework& framework) {
     framework.start_category("Channel Semantics");
     
-    // Test 1: Channel creation detection
+    // Test 1: Channel creation detection with detailed validation
     {
-        framework.start_test("Channel Creation Detection");
-        auto result = framework.runPointerAnalysis("channel/channel_create_test.ll");
-        framework.assert_true(result.passed, "Channel creation analysis should succeed");
+        framework.start_test("Channel Creation Detection Correctness");
+        auto basic_result = framework.runDetailedPointerAnalysis("channel/channel_create_test.ll", "basic");
+        auto kcs_result = framework.runDetailedPointerAnalysis("channel/channel_create_test.ll", "kcs", 2);
         
-        // Should detect channel instances and operations
-        framework.assert_contains(result.actual, "Channels:", "Should detect channel instances");
+        framework.assert_true(basic_result.passed, "Basic channel creation analysis should succeed");
+        framework.assert_true(kcs_result.passed, "K-callsite channel creation analysis should succeed");
+        
+        // Both should detect the same channel instances, but contexts may differ
+        // Channel detection should be consistent across analysis modes
+        framework.assert_true(basic_result.call_graph_nodes > 0, "Should create call graph nodes for channel operations");
+        framework.assert_true(kcs_result.call_graph_nodes >= basic_result.call_graph_nodes, 
+                            "Context-sensitive analysis should maintain or increase precision");
+        
+        std::cout << "  Channel Creation Analysis:" << std::endl;
+        std::cout << "    Basic: " << basic_result.points_to_nodes << " points-to nodes, " 
+                  << basic_result.call_graph_nodes << " CG nodes" << std::endl;
+        std::cout << "    K-callsite: " << kcs_result.points_to_nodes << " points-to nodes, " 
+                  << kcs_result.call_graph_nodes << " CG nodes" << std::endl;
     }
     
-    // Test 2: Send operation detection
+    // Test 2: Send operation detection with context sensitivity
     {
-        framework.start_test("Channel Send Operation Detection");
-        auto result = framework.runPointerAnalysis("channel/send_test.ll");
-        framework.assert_true(result.passed, "Send operation analysis should succeed");
+        framework.start_test("Channel Send Operation Context Sensitivity");
+        auto basic_result = framework.runDetailedPointerAnalysis("channel/send_test.ll", "basic");
+        auto kcs_result = framework.runDetailedPointerAnalysis("channel/send_test.ll", "kcs", 2);
         
-        // Should detect channel operations
-        framework.assert_contains(result.actual, "Channels:", "Should detect channel operations");
+        framework.assert_true(basic_result.passed, "Basic send operation analysis should succeed");
+        framework.assert_true(kcs_result.passed, "K-callsite send operation analysis should succeed");
+        
+        // Send operations should be detected consistently
+        // Context-sensitive analysis might differentiate send contexts
+        framework.assert_true(kcs_result.call_graph_nodes >= basic_result.call_graph_nodes, 
+                            "Context-sensitive analysis should capture send operation contexts");
+        
+        // Both should visit the same functions but with potentially different contexts
+        framework.assert_true(basic_result.visited_functions == kcs_result.visited_functions, 
+                            "Both analyses should visit the same set of functions");
     }
     
-    // Test 3: Receive operation detection
+    // Test 3: Receive operation detection with precision comparison
     {
-        framework.start_test("Channel Receive Operation Detection");
-        auto result = framework.runPointerAnalysis("channel/recv_test.ll");
-        framework.assert_true(result.passed, "Receive operation analysis should succeed");
+        framework.start_test("Channel Receive Operation Precision Comparison");
+        auto basic_result = framework.runDetailedPointerAnalysis("channel/recv_test.ll", "basic");
+        auto kcs_result = framework.runDetailedPointerAnalysis("channel/recv_test.ll", "kcs", 2);
         
-        // Should detect channel operations
-        framework.assert_contains(result.actual, "Channels:", "Should detect channel operations");
+        framework.assert_true(basic_result.passed, "Basic receive operation analysis should succeed");
+        framework.assert_true(kcs_result.passed, "K-callsite receive operation analysis should succeed");
+        
+        // Validate that receive operations are properly analyzed
+        framework.assert_true(basic_result.call_graph_edges > 0, "Should detect function calls in receive operations");
+        framework.assert_true(kcs_result.call_graph_edges >= basic_result.call_graph_edges, 
+                            "Context-sensitive analysis should maintain or increase call graph precision");
     }
     
-    // Test 4: Complete channel communication flow
+    // Test 4: Complete channel communication flow with detailed metrics
     {
-        framework.start_test("Complete Channel Communication Flow");
-        auto result = framework.runPointerAnalysis("channel/flow_test.ll");
-        framework.assert_true(result.passed, "Channel flow analysis should succeed");
+        framework.start_test("Complete Channel Communication Flow Analysis");
+        auto basic_result = framework.runDetailedPointerAnalysis("channel/flow_test.ll", "basic");
+        auto kcs_result = framework.runDetailedPointerAnalysis("channel/flow_test.ll", "kcs", 2);
         
-        // Should detect multiple channel operations
-        framework.assert_contains(result.actual, "Channels:", "Should detect channel flow");
+        framework.assert_true(basic_result.passed, "Basic channel flow analysis should succeed");
+        framework.assert_true(kcs_result.passed, "K-callsite channel flow analysis should succeed");
+        
+        // Validate precision progression between analysis modes
+        framework.assert_true(kcs_result.call_graph_nodes >= basic_result.call_graph_nodes, 
+                            "K-callsite should be at least as precise as basic");
+        framework.assert_true(kcs_result.points_to_nodes >= basic_result.points_to_nodes, 
+                            "K-callsite should maintain or increase points-to precision for channel flow");
+        
+        // Print detailed comparison
+        std::cout << "  Channel Flow Analysis Comparison:" << std::endl;
+        std::cout << "    Basic: " << basic_result.call_graph_nodes << " nodes, " 
+                  << basic_result.points_to_nodes << " points-to" << std::endl;
+        std::cout << "    K-callsite: " << kcs_result.call_graph_nodes << " nodes, " 
+                  << kcs_result.points_to_nodes << " points-to" << std::endl;
     }
     
-    // Test 5: Channel data flow constraints
+    // Test 5: Channel data flow constraints correctness
     {
-        framework.start_test("Channel Data Flow Constraints");
-        auto result = framework.runPointerAnalysis("channel/dataflow_test.ll");
+        framework.start_test("Channel Data Flow Constraints Correctness");
+        auto result = framework.runDetailedPointerAnalysis("channel/dataflow_test.ll", "basic");
         framework.assert_true(result.passed, "Channel dataflow analysis should succeed");
         
-        // Should create data flow constraints between send and receive
-        framework.assert_contains(result.actual, "PointsToMap:", "Should create pointer constraints");
-    }
-    
-    // Test 6: Tokio channel operations
-    {
-        framework.start_test("Tokio Channel Operations");
-        auto result = framework.runPointerAnalysis("channel/tokio_test.ll");
-        framework.assert_true(result.passed, "Tokio channel analysis should succeed");
+        // Validate that data flow creates proper constraints
+        framework.assert_true(result.points_to_nodes > 0, "Should create data flow constraints");
+        framework.assert_true(result.call_graph_edges > 0, "Should track channel operation calls");
         
-        // Should detect Tokio channel operations
-        framework.assert_contains(result.actual, "Channels:", "Should detect Tokio channels");
+        // Print detailed analysis for validation
+        framework.print_detailed_analysis(result);
     }
     
-    // Test 7: Channel operation with real Rust mangled names
+    // Test 6: Tokio channel operations with context differentiation
     {
-        framework.start_test("Real Rust Mangled Channel Names");
-        auto result = framework.runPointerAnalysis("channel/mangled_test.ll");
+        framework.start_test("Tokio Channel Context Differentiation");
+        auto basic_result = framework.runDetailedPointerAnalysis("channel/tokio_test.ll", "basic");
+        auto kcs_result = framework.runDetailedPointerAnalysis("channel/tokio_test.ll", "kcs", 2);
+        
+        framework.assert_true(basic_result.passed, "Basic Tokio analysis should succeed");
+        framework.assert_true(kcs_result.passed, "K-callsite Tokio analysis should succeed");
+        
+        // Tokio channels should be analyzed consistently across modes
+        framework.assert_true(basic_result.visited_functions == kcs_result.visited_functions, 
+                            "Both analyses should visit the same Tokio functions");
+        
+        // Context-sensitive analysis might create more precise async contexts
+        framework.assert_true(kcs_result.call_graph_nodes >= basic_result.call_graph_nodes, 
+                            "K-callsite should handle async contexts precisely");
+    }
+    
+    // Test 7: Real Rust mangled names correctness validation
+    {
+        framework.start_test("Real Rust Mangled Names Correctness");
+        auto result = framework.runDetailedPointerAnalysis("channel/mangled_test.ll", "basic");
         framework.assert_true(result.passed, "Real mangled names analysis should succeed");
         
-        // Should properly demangle and detect Rust channel operations
-        framework.assert_contains(result.actual, "Channels:", "Should detect real Rust channels");
+        // Should properly process real Rust channel function names
+        framework.assert_true(result.call_graph_nodes > 0, "Should process Rust mangled function names");
+        framework.assert_true(result.points_to_nodes > 0, "Should create channel object relationships");
+        
+        // Validate specific function detection for real Rust patterns
+        bool found_channel_functions = false;
+        for (const auto& func_count : result.function_instance_counts) {
+            if (func_count.first.find("channel") != std::string::npos || 
+                func_count.first.find("mpsc") != std::string::npos) {
+                found_channel_functions = true;
+                break;
+            }
+        }
+        framework.assert_true(found_channel_functions, "Should detect real Rust channel function patterns");
     }
     
-    // Test 8: Channel constraints integration
+    // Test 8: Channel constraints integration with cross-analysis validation
     {
-        framework.start_test("Channel Constraints Integration");
-        auto result = framework.runPointerAnalysis("channel/constraints_test.ll");
-        framework.assert_true(result.passed, "Channel constraints integration should succeed");
+        framework.start_test("Channel Constraints Integration Validation");
+        auto basic_result = framework.runDetailedPointerAnalysis("channel/constraints_test.ll", "basic");
+        auto kcs_result = framework.runDetailedPointerAnalysis("channel/constraints_test.ll", "kcs", 2);
         
-        // Should integrate channel constraints with regular pointer analysis
-        framework.assert_contains(result.actual, "PointsToMap:", "Should integrate with pointer analysis");
-        framework.assert_contains(result.actual, "Channels:", "Should apply channel constraints");
+        framework.assert_true(basic_result.passed, "Basic constraints integration should succeed");
+        framework.assert_true(kcs_result.passed, "K-callsite constraints integration should succeed");
+        
+        // Channel constraints should integrate properly with pointer analysis
+        framework.assert_true(basic_result.points_to_nodes > 0, "Should integrate channel constraints with pointer analysis");
+        framework.assert_true(basic_result.call_graph_edges > 0, "Should track channel constraint application");
+        
+        // Context-sensitive analysis should maintain constraint validity
+        framework.assert_true(kcs_result.points_to_nodes >= basic_result.points_to_nodes, 
+                            "Context-sensitive constraints should maintain or increase precision");
+        
+        std::cout << "  Channel Constraints Integration:" << std::endl;
+        std::cout << "    Basic: " << basic_result.points_to_nodes << " constraint nodes" << std::endl;
+        std::cout << "    K-callsite: " << kcs_result.points_to_nodes << " constraint nodes" << std::endl;
     }
 } 

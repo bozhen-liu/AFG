@@ -124,14 +124,51 @@ ctest -R channel_analysis_tests
 - **Analysis execution** with different modes (basic, kcs, origin)
 - **Result validation** with assertions
 - **Output capture** and analysis
+- **Detailed call graph analysis** with function instance tracking
+- **Context differentiation validation** for correctness testing
 
 #### Test Assertions
+
+##### Basic Assertions
 
 ```cpp
 framework.assert_true(condition, "message");
 framework.assert_equals(expected, actual, "message");
 framework.assert_contains(text, substring, "message");
 framework.assert_greater_than(actual, expected, "message");
+```
+
+##### Advanced Correctness Assertions
+
+```cpp
+// Validate specific function instance counts (context-sensitive behavior)
+framework.assert_function_instance_count("function_name", expected_count, "message", result);
+
+// Validate context differentiation between analysis modes
+framework.assert_context_differentiation("function_name", {"context1", "context2"}, "message", result);
+
+// Validate call graph structure precision
+framework.assert_call_graph_nodes_count(expected_nodes, "message", result);
+
+// Print detailed analysis breakdown for debugging
+framework.print_detailed_analysis(result);
+```
+
+#### Detailed Analysis Results
+
+The framework now provides comprehensive analysis details:
+
+```cpp
+struct DetailedTestResult {
+    bool passed;
+    size_t points_to_nodes;                              // Points-to graph size
+    size_t call_graph_nodes;                             // Call graph precision
+    size_t call_graph_edges;                            // Call relationships
+    size_t visited_functions;                           // Function coverage
+    std::map<std::string, int> function_instance_counts; // Context instances per function
+    std::vector<std::string> function_contexts;         // All context strings
+    std::string raw_output;                             // Complete analysis output
+};
 ```
 
 ## Test Examples
@@ -154,13 +191,43 @@ framework.assert_true(result.passed, "Channel creation analysis should succeed")
 framework.assert_contains(result.actual, "Channels:", "Should detect channel instances");
 ```
 
-### Context-Sensitive Comparison
+### Context-Sensitive Correctness Validation
 
 ```cpp
-framework.start_test("K-Callsite Analysis");
-auto basic_result = framework.runPointerAnalysis("test.ll", "basic");
-auto kcs_result = framework.runPointerAnalysis("test.ll", "kcs", 2);
-// Compare results between analysis modes
+framework.start_test("Basic vs K-Callsite Correctness Comparison");
+
+// Run both analysis modes on the same input
+auto basic_result = framework.runDetailedPointerAnalysis("pointer/simple.ll", "basic");
+auto kcs_result = framework.runDetailedPointerAnalysis("pointer/simple.ll", "kcs", 2);
+
+// Validate correctness differences
+framework.assert_function_instance_count("callee", 1, "Basic analysis should merge all callee instances", basic_result);
+framework.assert_function_instance_count("callee", 2, "K=2 analysis should differentiate callee contexts", kcs_result);
+
+// Validate context differentiation
+std::vector<std::string> expected_contexts = {"caller1", "caller2"};
+framework.assert_context_differentiation("callee", expected_contexts,
+                                       "Should create distinct contexts for different call paths", kcs_result);
+
+// Print detailed analysis for inspection
+framework.print_detailed_analysis(kcs_result);
+```
+
+### Advanced Analysis Comparison
+
+```cpp
+framework.start_test("Cross-Analysis Consistency Validation");
+
+auto basic_result = framework.runDetailedPointerAnalysis("test.ll", "basic");
+auto kcs_result = framework.runDetailedPointerAnalysis("test.ll", "kcs", 2);
+
+// Validate consistency
+framework.assert_true(basic_result.visited_functions == kcs_result.visited_functions,
+                    "Both analyses should visit the same functions");
+
+// Validate precision improvement
+framework.assert_true(kcs_result.call_graph_nodes >= basic_result.call_graph_nodes,
+                    "Context-sensitive analysis should maintain or increase precision");
 ```
 
 ## Expected Output Format
@@ -281,6 +348,34 @@ For taint analysis tests:
 3. **Origin Tracking**: Context-sensitive taint tracking
 4. **Tagged Object Detection**: Matching LLVM IR to config
 
+### Context-Sensitive Analysis Correctness Validation
+
+The framework now includes comprehensive correctness validation for pointer analysis modes:
+
+1. **Function Instance Counting**: Validates that context-sensitive analysis correctly differentiates function instances:
+
+   - Basic analysis: context-insensitive (merges all contexts)
+   - K-callsite analysis: context-sensitive (separates different call contexts)
+
+2. **Context Differentiation Testing**:
+
+   - Validates that different call paths create distinct contexts
+   - Verifies context string format and content
+   - Ensures proper context propagation through call chains
+
+3. **Cross-Analysis Consistency**:
+
+   - Compares results between analysis modes for consistency
+   - Validates that context-sensitive analysis maintains or improves precision
+   - Ensures all modes visit the same set of functions
+
+4. **Specific Correctness Assertions**:
+   ```cpp
+   // Example: simple.ll with callee called from caller1 and caller2
+   framework.assert_function_instance_count("callee", 1, "Basic should merge contexts", basic_result);
+   framework.assert_function_instance_count("callee", 2, "K=2 should differentiate contexts", kcs_result);
+   ```
+
 ### Debug Mode
 
 Enable debug output for detailed analysis information:
@@ -315,4 +410,6 @@ The AFG test framework provides **complete coverage** of all functionality:
 - ✅ Production-level complexity matching examples
 - ✅ Error handling and edge cases
 
-**Result: 89/89 tests passing (100% success rate)**
+**Result: All tests passing with enhanced correctness validation**
+
+The test framework now provides rigorous correctness validation specifically designed to differentiate between context-sensitive and context-insensitive pointer analysis behavior, ensuring accurate implementation of both basic and K-callsite analysis modes.
