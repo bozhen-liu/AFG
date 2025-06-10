@@ -99,7 +99,7 @@ namespace llvm
         using PointsToMapTy = std::unordered_map<Node *, std::unordered_set<Node *>>;
 
         virtual void analyze(Module &M);
-        const PointsToMapTy &getPointsToMap() const;
+        const PointsToMapTy &getPointsToMap() const { return pointsToMap; }
         const CallGraph &getCallGraph() const { return callGraph; }
         const std::unordered_set<Function *> &getVisitedFunctions() const
         {
@@ -163,9 +163,9 @@ namespace llvm
         std::vector<PtrConstraint> Worklist; // Worklist for new constraints to visit
         void solveConstraints();
 
-        std::string inputDir;          // Directory containing the JSON file
-        std::string outputFile;        // Output file name
-        bool parseInputDir(Module &M); // Parse the input directory from the module
+        std::string inputDir;           // Directory containing the JSON file
+        std::string outputFile;         // Output file name
+        bool parseInputDir(Module &M);  // Parse the input directory from the module
         bool parseOutputDir(Module &M); // Parse the output file path from the module
 
         llvm::Function *parseMainFn(Module &M); // Parse the main function from the module

@@ -640,7 +640,7 @@ bool PointerAnalysis::parseInputDir(Module &M)
 bool PointerAnalysis::parseOutputDir(Module &M)
 {
     if (inputDir.empty())
-    {   
+    {
         parseInputDir(M); // Ensure inputDir is set
     }
 
@@ -651,11 +651,6 @@ bool PointerAnalysis::parseOutputDir(Module &M)
     errs() << "Output file path: " << outputFile << "\n";
 
     return true;
-}
-
-const PointerAnalysis::PointsToMapTy &PointerAnalysis::getPointsToMap() const
-{
-    return pointsToMap;
 }
 
 const void PointerAnalysis::printStatistics()
@@ -710,4 +705,3 @@ void PointerAnalysis::printPointsToMap(std::ofstream &outFile) const
         }
     }
 }
-
