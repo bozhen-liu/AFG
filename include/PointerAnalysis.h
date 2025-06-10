@@ -8,11 +8,40 @@
 #include "llvm/IR/InstVisitor.h"
 #include <unordered_map>
 #include <unordered_set>
+#include <tuple>
 #include <vector>
 #include <utility>
+#include <functional>
 #include <deque>
 #include "CallGraph.h"
 #include "ChannelSemantics.h"
+
+namespace std
+{
+    template <>
+    struct hash<std::vector<uint64_t>>
+    {
+        std::size_t operator()(const std::vector<uint64_t> &v) const noexcept
+        {
+            std::size_t h = 0;
+            for (auto x : v)
+                h ^= std::hash<uint64_t>()(x) + 0x9e3779b9 + (h << 6) + (h >> 2);
+            return h;
+        }
+    };
+
+    template <>
+    struct hash<std::tuple<llvm::Value *, llvm::Context, std::vector<uint64_t>>>
+    {
+        std::size_t operator()(const std::tuple<llvm::Value *, llvm::Context, std::vector<uint64_t>> &t) const noexcept
+        {
+            std::size_t h1 = std::hash<llvm::Value *>()(std::get<0>(t));
+            std::size_t h2 = std::hash<llvm::Context>()(std::get<1>(t));
+            std::size_t h3 = std::hash<std::vector<uint64_t>>()(std::get<2>(t));
+            return h1 ^ (h2 << 1) ^ (h3 << 2);
+        }
+    };
+}
 
 namespace llvm
 {
@@ -26,24 +55,34 @@ namespace llvm
 
     struct Node
     {
-        int id;             // Unique node ID
-        llvm::Value *value; // The LLVM value
-        Context context;    // The context
+        int id;                        // Unique node ID
+        llvm::Value *value;            // The LLVM value
+        Context context;               // The context
+        std::vector<uint64_t> indices; // For field-sensitive analysis, stores the indices of the fields
 
         // Constructor
-        Node(int nodeId, llvm::Value *v, Context ctx = Everywhere) : id(nodeId), value(v), context(ctx) {}
+        Node(int nodeId, llvm::Value *v, Context ctx = Everywhere, std::vector<uint64_t> idx = {}) : id(nodeId), value(v), context(ctx), indices(std::move(idx)) {}
 
         // Equality operator for unordered_map/unordered_set
         bool operator==(const Node &other) const
         {
-            return value == other.value && context == other.context && id == other.id;
+            return value == other.value && context == other.context && id == other.id && indices == other.indices;
         }
 
         void print(llvm::raw_ostream &os) const
         {
             os << "[Node id=" << id << ", value=";
             if (value)
-                value->print(os);
+            {
+                if (auto f = dyn_cast<Function>(value))
+                {
+                    os << f->getName();
+                }
+                else
+                {
+                    value->print(os);
+                }
+            }
             else
                 os << "null";
             os << ", context=";
@@ -66,6 +105,17 @@ namespace llvm
                 }
             }
             os << "]";
+            if (!indices.empty())
+            {
+                os << ", indices=["; // or fields
+                for (size_t i = 0; i < indices.size(); ++i)
+                {
+                    os << indices[i];
+                    if (i + 1 < indices.size())
+                        os << ",";
+                }
+                os << "]";
+            }
             os << "]";
         }
     };
@@ -107,10 +157,10 @@ namespace llvm
         {
             return Visited;
         }
-
         const std::string getOutputFileName() const { return outputFile; }
 
         const void printStatistics();
+        void printPointsToMap(std::ofstream &os) const;
 
         void clear()
         {
@@ -121,15 +171,64 @@ namespace llvm
             callGraph.clear();
         }
 
-        // Channel semantics integration
-        ChannelSemantics channelSemantics;
-        
-        // Make Worklist accessible for channel constraints
-        std::vector<PtrConstraint> Worklist; // Worklist for new constraints to visit
-
-        // Make getOrCreateNode public for channel semantics
-        Node *getOrCreateNode(llvm::Value *value, Context context = Everywhere); // create or find node: ctx == Everywhere
-
+        std::vector<PtrConstraint> Worklist;   // Worklist for new constraints to visit
+        const void printLastConstraint() const // Print the last constraint added to the worklist
+        {
+            if (!Worklist.empty())
+            {
+                const PtrConstraint &last = Worklist.back();
+                const char *typeStr = nullptr;
+                switch (last.type)
+                {
+                case Assign:
+                    typeStr = "Assign";
+                    break;
+                case Load:
+                    typeStr = "Load";
+                    break;
+                case Store:
+                    typeStr = "Store";
+                    break;
+                case Channel:
+                    typeStr = "Channel";
+                    break;
+                default:
+                    typeStr = "Unknown";
+                    break;
+                }
+                errs() << "\t Added constraint: " << typeStr
+                       << " src=" << (last.src ? last.src->id : -1);
+                if (last.src && last.src->indices.size() > 0)
+                {
+                    errs() << " (indices=[";
+                    for (size_t i = 0; i < last.src->indices.size(); ++i)
+                    {
+                        errs() << last.src->indices[i];
+                        if (i + 1 < last.src->indices.size())
+                            errs() << ",";
+                    }
+                    errs() << "])";
+                }
+                errs() << " dst=" << (last.dst ? last.dst->id : -1);
+                if (last.dst && last.dst->indices.size() > 0)
+                {
+                    errs() << " (indices=[";
+                    for (size_t i = 0; i < last.dst->indices.size(); ++i)
+                    {
+                        errs() << last.dst->indices[i];
+                        if (i + 1 < last.dst->indices.size())
+                            errs() << ",";
+                    }
+                    errs() << "])";
+                }
+                errs() << "\n";
+            }
+            else
+            {
+                llvm::errs() << "No constraints in the worklist.\n";
+            }
+        }
+        Node *getOrCreateNode(llvm::Value *value, Context context = Everywhere, std::vector<uint64_t> indices = {}); // create or find node: ctx == Everywhere
         virtual Context getContext(Context context = Everywhere, const Value *newCallSite = nullptr);
         virtual void processInstruction(Instruction &I, CGNode *cgnode);
 
@@ -139,6 +238,7 @@ namespace llvm
         virtual void visitAllocaInst(AllocaInst &I);
         void visitBitCastInst(BitCastInst &I);
         void visitGetElementPtrInst(GetElementPtrInst &I);
+        void visitExtractValueInst(ExtractValueInst &EVI);
         void visitPHINode(PHINode &I);
         void visitAtomicRMWInst(AtomicRMWInst &I);
         void visitAtomicCmpXchgInst(AtomicCmpXchgInst &I);
@@ -146,7 +246,7 @@ namespace llvm
         virtual void visitCallInst(CallInst &I);
         void visitInstruction(Instruction &I); // fallback
 
-        void printPointsToMap(std::ofstream &os) const;
+        ChannelSemantics channelSemantics; // Channel semantics integration
 
     protected:
         int nextNodeId = 0;     // Monotonically increasing node ID
@@ -158,7 +258,7 @@ namespace llvm
         std::unordered_map<CGNode, int> VisitCount; // Track the number of visits for each function/cgnode
         std::vector<CGNode> FunctionWorklist;       // Worklist for new functions (with context) to visit
 
-        std::unordered_map<std::pair<llvm::Value *, Context>, Node *> ValueContextToNodeMap; // Map to track Value and context pairs to Node
+        std::unordered_map<std::tuple<llvm::Value *, Context, std::vector<uint64_t>>, Node *> ValueContextToNodeMap; // Map to track Value and context pairs to Node
 
         void AddToFunctionWorklist(CGNode *callee);
         void processVtable(GlobalVariable &GV);
@@ -180,7 +280,7 @@ namespace llvm
 
         llvm::Function *parseMainFn(Module &M); // Parse the main function from the module
         void onthefly(Module &M);               // On-the-fly analysis
-        
+
         // Channel-specific analysis methods
         void handleChannelOperation(CallInst &CI);
         bool handleChannelConstraints();

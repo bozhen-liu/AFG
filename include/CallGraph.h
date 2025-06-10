@@ -114,19 +114,26 @@ namespace llvm
 namespace std
 {
     template <>
-    struct hash<llvm::CGNode> // Hash function for CGNode
+    struct hash<llvm::Context>
+    {
+        std::size_t operator()(const llvm::Context &ctx) const noexcept
+        {
+            std::size_t h = 0;
+            for (const auto *v : ctx.values)
+            {
+                h ^= std::hash<const llvm::Value *>{}(v) + 0x9e3779b9 + (h << 6) + (h >> 2);
+            }
+            return h;
+        }
+    };
+
+    template <>
+    struct hash<llvm::CGNode>
     {
         std::size_t operator()(const llvm::CGNode &node) const noexcept
         {
             std::size_t h1 = std::hash<llvm::Function *>{}(node.function);
-            std::size_t h2 = 0;
-            if (!node.context.empty())
-            {
-                for (const auto *v : node.context)
-                {
-                    h2 ^= std::hash<const llvm::Value *>{}(v) + 0x9e3779b9 + (h2 << 6) + (h2 >> 2);
-                }
-            }
+            std::size_t h2 = std::hash<llvm::Context>{}(node.context);
             return h1 ^ (h2 << 1);
         }
     };
@@ -137,11 +144,7 @@ namespace std
         std::size_t operator()(const std::pair<llvm::Value *, llvm::Context> &p) const noexcept
         {
             std::size_t h1 = std::hash<llvm::Value *>{}(p.first);
-            std::size_t h2 = 0;
-            for (const auto *v : p.second)
-            {
-                h2 ^= std::hash<const llvm::Value *>{}(v) + 0x9e3779b9 + (h2 << 6) + (h2 >> 2);
-            }
+            std::size_t h2 = std::hash<llvm::Context>{}(p.second);
             return h1 ^ (h2 << 1);
         }
     };

@@ -10,3 +10,4 @@ examples/tokio-demo/target/
 examples/channel-test/target/
 todo.txt
 commands.txt
+*output.txt
