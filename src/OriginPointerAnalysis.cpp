@@ -8,11 +8,9 @@
 #include <fstream>
 #include <nlohmann/json.hpp>
 
-
 using nlohmann::json;
 
 using namespace llvm;
-
 
 // Helper function to trim leading and trailing spaces
 static inline std::string trim(const std::string &str)
@@ -27,7 +25,8 @@ static bool isThreadRelatedCallInstruction(const Value *callsite)
     if (!callsite)
         return false;
 
-    if (isa<AllocaInst>(callsite) || isa<GlobalVariable>(callsite))    {
+    if (isa<AllocaInst>(callsite) || isa<GlobalVariable>(callsite))
+    {
         // Ignore allocations and global variables
         if (DebugMode)
             errs() << "Ignoring allocation/global variable as tainted objects: " << *callsite << "\n";
@@ -57,7 +56,6 @@ static bool isThreadRelatedCallInstruction(const Value *callsite)
     }
     return false;
 }
-
 
 Context OriginPointerAnalysis::getContext(Context context, const Value *newCallSite)
 {
@@ -102,8 +100,8 @@ void OriginPointerAnalysis::processGlobalVar(GlobalVariable &GV)
             }
 
             // Use the node (GV) to create constraints
-            Node *gvNode = getOrCreateNode(&GV);           // Use the GlobalVariable as context
-            Worklist.push_back({Assign, nullptr, gvNode}); // Points to self
+            Node *gvNode = getOrCreateNode(&GV);                  // Use the GlobalVariable as context
+            Worklist.push_back({Assign, UINT64_MAX, gvNode->id}); // Points to self
 
             if (DebugMode)
                 errs() << "Added tainted global variable \"" << gvStr << "\" to the worklist.\n";
@@ -112,7 +110,7 @@ void OriginPointerAnalysis::processGlobalVar(GlobalVariable &GV)
         {
             // Handle non-tagged global variables
             Node *gvNode = getOrCreateNode(&GV);
-            Worklist.push_back({Assign, nullptr, gvNode}); // Points to self
+            Worklist.push_back({Assign, UINT64_MAX, gvNode->id}); // Points to self
 
             if (DebugMode)
                 errs() << "Added global variable \"" << gvStr << "\" to the worklist.\n";
@@ -147,21 +145,21 @@ void OriginPointerAnalysis::visitAllocaInst(AllocaInst &AI)
 
         Context context = getContext(CurrentContext, &AI); // Use the AllocaInst as context
         Node *aiNode = getOrCreateNode(&AI, context);
-        Worklist.push_back({Assign, nullptr, aiNode}); // Points to self
+        Worklist.push_back({Assign, UINT64_MAX, aiNode->id}); // Points to self
         errs() << "Added alloca \"" << AI << "\" to the worklist with context \"" << context << "\".\n";
     }
     else
     {
         // Handle non-tagged allocas
         Node *aiNode = getOrCreateNode(&AI, getContext(CurrentContext, nullptr));
-        Worklist.push_back({Assign, nullptr, aiNode}); // Points to self
+        Worklist.push_back({Assign, UINT64_MAX, aiNode->id}); // Points to self
     }
 }
 
 bool OriginPointerAnalysis::parseTaintConfig(Module &M)
 {
     if (inputDir.empty())
-    {   
+    {
         parseInputDir(M); // Ensure inputDir is set
     }
 
@@ -170,14 +168,16 @@ bool OriginPointerAnalysis::parseTaintConfig(Module &M)
     llvm::sys::path::append(taintConfigPath, "taint_config.json");
     taintJsonFile = std::string(taintConfigPath.c_str());
     errs() << "Taint config file path: " << taintJsonFile << "\n";
-    
+
     // Check if the taint config file exists
     if (llvm::sys::fs::exists(taintJsonFile))
     {
         if (DebugMode)
             errs() << "Taint config file exists. Continuing with analysis...\n";
-    }else{
-        errs() << "Taint config file does NOT exist at " << taintJsonFile <<  "\n";
+    }
+    else
+    {
+        errs() << "Taint config file does NOT exist at " << taintJsonFile << "\n";
         return false;
     }
 
@@ -231,18 +231,31 @@ void OriginPointerAnalysis::getPtrsPTSIncludeTaintedObjects()
 
     errs() << "Starting to get pointers that point to tainted objects.\n";
     // Iterate through the points-to map
-    for (const auto &entry : pointsToMap)
+    for (const auto &entry : idToNodeMap)
     {
-        Node *ptr = entry.first;
-        auto &targets = entry.second;
+        Node *ptr = entry.second;
+        auto &target_ids = entry.second->pts;
 
         if (DebugMode)
             errs() << "Pointer: " << *ptr << "\n";
 
-        for (Node *target : targets)
+        for (auto target_id : target_ids)
         {
             if (DebugMode)
-                errs() << "  -> Target: " << target << "\n";
+                errs() << "  -> Target: " << target_id << "\n";
+
+            Node *target = nullptr;
+            auto it = idToNodeMap.find(target_id);
+            if (it != idToNodeMap.end() && it->second)
+            {
+                target = it->second;
+            }
+            else
+            {
+                if (DebugMode)
+                    errs() << "    -> Target not found in idToNodeMap for ID: " << target_id << "\n";
+                continue; // Skip if target is not found
+            }
 
             // Check if the target is a tainted object
             if (TaintedObjects.find(target->value) != TaintedObjects.end())
@@ -251,7 +264,7 @@ void OriginPointerAnalysis::getPtrsPTSIncludeTaintedObjects()
                     errs() << "    -> Found tainted object. \n";
 
                 // Add the pointer to the result map under the tainted object
-                TaintedObjectToPointersMap[target].insert(entry.first);
+                TaintedObjectToPointersMap[target].insert(entry.second);
             }
         }
     }

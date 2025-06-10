@@ -38,27 +38,32 @@ llvm::Function *PointerAnalysis::parseMainFn(Module &M)
     if (!mainFn || mainFn->isDeclaration())
     {
         errs() << "No main function found, looking for alternative entry points.\n";
-        
+
         // Look for other possible entry points
-        for (Function &F : M) {
-            if (!F.isDeclaration() && F.hasName()) {
+        for (Function &F : M)
+        {
+            if (!F.isDeclaration() && F.hasName())
+            {
                 StringRef name = F.getName();
                 // Look for Rust main functions
-                if (name.contains("main") && !name.contains("lang_start")) {
+                if (name.contains("main") && !name.contains("lang_start"))
+                {
                     errs() << "Using alternative entry point: " << name << "\n";
                     return &F;
                 }
             }
         }
-        
+
         // If no main-like function found, just pick the first non-declaration function
-        for (Function &F : M) {
-            if (!F.isDeclaration()) {
+        for (Function &F : M)
+        {
+            if (!F.isDeclaration())
+            {
                 errs() << "Using first available function as entry point: " << F.getName() << "\n";
                 return &F;
             }
         }
-        
+
         return nullptr;
     }
 
@@ -66,60 +71,75 @@ llvm::Function *PointerAnalysis::parseMainFn(Module &M)
     Function *realMainFn = nullptr;
     // Get the first basic block of mainFn
     BasicBlock &firstBB = mainFn->front();
-    
+
     // Look for the lang_start call in the first few instructions
     // Instead of hardcoding the 3rd instruction, search through the first several instructions
     auto it = firstBB.begin();
     auto end = firstBB.end();
     int instructionCount = 0;
     const int maxInstructionsToCheck = 5; // Check first 5 instructions
-    
-    while (it != end && instructionCount < maxInstructionsToCheck) {
+
+    while (it != end && instructionCount < maxInstructionsToCheck)
+    {
         Instruction &inst = *it;
-        
+
         if (DebugMode)
             errs() << "Instruction " << (instructionCount + 1) << ": " << inst << "\n";
-        
-        if (auto *callInst = dyn_cast<CallInst>(&inst)) {
+
+        if (auto *callInst = dyn_cast<CallInst>(&inst))
+        {
             Function *calledFunc = callInst->getCalledFunction();
-            if (calledFunc && calledFunc->getName().contains("lang_start")) {
+            if (calledFunc && calledFunc->getName().contains("lang_start"))
+            {
                 errs() << "Found lang_start call at instruction " << (instructionCount + 1) << "\n";
-                
+
                 // The first argument to lang_start is the real main function
-                if (callInst->arg_size() > 0) {
-                    if (auto *realMain = dyn_cast<Function>(callInst->getArgOperand(0))) {
+                if (callInst->arg_size() > 0)
+                {
+                    if (auto *realMain = dyn_cast<Function>(callInst->getArgOperand(0)))
+                    {
                         realMainFn = realMain;
                         break;
-                    } else {
+                    }
+                    else
+                    {
                         errs() << "The first argument is not a function.\n";
                     }
-                } else {
+                }
+                else
+                {
                     errs() << "No arguments found for the call instruction.\n";
                 }
             }
         }
-        
+
         ++it;
         ++instructionCount;
     }
 
-    if (!realMainFn) {
+    if (!realMainFn)
+    {
         errs() << "No real main function found through lang_start pattern.\n";
         errs() << "Falling back to looking for any function with 'main' in the name.\n";
-        
+
         // Fallback: look for any function with "main" in the name
-        for (Function &F : M) {
-            if (!F.isDeclaration() && F.hasName()) {
+        for (Function &F : M)
+        {
+            if (!F.isDeclaration() && F.hasName())
+            {
                 StringRef name = F.getName();
-                if (name.contains("main") && !name.contains("lang_start")) {
+                if (name.contains("main") && !name.contains("lang_start"))
+                {
                     errs() << "Using fallback main function: " << name << "\n";
                     return &F;
                 }
             }
         }
-        
+
         return nullptr;
-    } else {
+    }
+    else
+    {
         errs() << "Located real main function: " << realMainFn->getName() << "\n";
         return realMainFn;
     }
@@ -159,10 +179,11 @@ void PointerAnalysis::onthefly(Module &M)
             errs() << "Function worklist size 2: " << FunctionWorklist.size() << "\n";
 
         // Add channel constraint to trigger channel processing
-        if (!channelSemantics.channel_operations.empty()) {
-            Worklist.push_back({Channel, nullptr, nullptr});
+        if (!channelSemantics.channel_operations.empty())
+        {
+            Worklist.push_back({Channel, UINT64_MAX, UINT64_MAX});
         }
-        
+
         // Solve constraints and discover new callees
         solveConstraints();
         if (DebugMode)
@@ -196,7 +217,7 @@ void PointerAnalysis::AddToFunctionWorklist(CGNode *callee)
     if (VisitCount[*callee] < 2 && !Visited.count(calleeFn))
     {
         if (DebugMode)
-            errs() << "Adding function: " << calleeFn << "\n";
+            errs() << "Adding function: " << calleeFn->getFunction().getName() << "\n";
 
         FunctionWorklist.push_back(*callee);
     }
@@ -227,20 +248,26 @@ void PointerAnalysis::visitFunction(CGNode *cgnode)
     }
 }
 
-Node *PointerAnalysis::getOrCreateNode(llvm::Value *value, Context context)
+Node *PointerAnalysis::getOrCreateNode(llvm::Value *value, Context context, std::vector<uint64_t> indices)
 {
     if (isa<GlobalVariable>(value) || isa<GlobalAlias>(value) || isa<GlobalIFunc>(value))
     {
         context = Everywhere; // Global variables are considered everywhere
     }
+    if (isa<GetElementPtrInst>(value) && indices.empty())
+    {
+        errs() << "Warning: getOrCreateNode called with GetElementPtrInst without indices. This may lead to incorrect analysis.\n"
+               << "\t Value: " << *value << "\n";
+    }
 
-    auto it = ValueContextToNodeMap.find(std::make_pair(value, context));
+    auto it = ValueContextToNodeMap.find(std::make_tuple(value, context, indices));
     if (it != ValueContextToNodeMap.end())
     {
         return it->second;
     }
-    Node *node = new Node(nextNodeId++, value, context);
-    ValueContextToNodeMap[std::make_pair(value, context)] = node;
+    Node *node = new Node(nextNodeId++, value, context, indices);
+    idToNodeMap[node->id] = node;
+    ValueContextToNodeMap[std::make_tuple(value, context, indices)] = node;
     return node;
 }
 
@@ -255,14 +282,6 @@ void PointerAnalysis::processInstruction(Instruction &I, CGNode *cgnode)
     CurrentContext = getContext(Everywhere, &I);
     visit(I); // InstVisitor dispatches to the correct visit* method
 
-    // // Variadic functions (e.g., printf)
-    // else if (auto *VAA = dyn_cast<VAArgInst>(&I))
-    // {
-    //     if (VAA->getType()->isPointerTy())
-    //     {
-    //         Worklist.push_back({Assign, VAA->getPointerOperand(), VAA});
-    //     }
-    // }
     // // Casts between pointers and integers can obscure pointer relationships
     // else if (auto *ITP = dyn_cast<IntToPtrInst>(&I))
     // {
@@ -299,7 +318,7 @@ void PointerAnalysis::processVtable(GlobalVariable &GV)
                     {
                         Node *gvNode = getOrCreateNode(&GV);
                         Node *fnNode = getOrCreateNode(fn);
-                        pointsToMap[gvNode].insert(fnNode); // Use the Node pointers in PointsToMap
+                        gvNode->pts.insert(fnNode->id); // Use the Node pointers in PointsToMap
 
                         if (DebugMode)
                             errs() << "    -> Added function to PointsToMap: " << fn->getName() << "\n";
@@ -319,7 +338,7 @@ void PointerAnalysis::processVtable(GlobalVariable &GV)
                     {
                         Node *gvNode = getOrCreateNode(&GV);
                         Node *fnNode = getOrCreateNode(fn);
-                        pointsToMap[gvNode].insert(fnNode); // Use the Node pointers in PointsToMap
+                        gvNode->pts.insert(fnNode->id); // Use the Node pointers in PointsToMap
 
                         if (DebugMode)
                             errs() << "    -> Added function to PointsToMap: " << fn->getName() << "\n";
@@ -347,7 +366,7 @@ void PointerAnalysis::processGlobalVar(GlobalVariable &GV)
     if (GV.getType()->isPointerTy())
     {
         Node *gvNode = getOrCreateNode(&GV);
-        Worklist.push_back({Assign, nullptr, gvNode}); // Points to self
+        Worklist.push_back({Assign, UINT64_MAX, gvNode->id}); // Points to self
 
         if (DebugMode)
             errs() << "Added global variable \"" << gvNode << "\" to the worklist.\n";
@@ -361,80 +380,134 @@ void PointerAnalysis::visitAllocaInst(AllocaInst &AI)
 
     // Handle non-tagged allocas
     Node *aiNode = getOrCreateNode(&AI, getContext());
-    Worklist.push_back({Assign, nullptr, aiNode}); // Points to self
-}
-
-void PointerAnalysis::visitStoreInst(StoreInst &SI)
-{
-    Value *val = SI.getValueOperand();
-    Value *ptr = SI.getPointerOperand();
-    if (val->getType()->isPointerTy())
-    {
-        Node *valNode = getOrCreateNode(val, getContext());
-        Node *ptrNode = getOrCreateNode(ptr, getContext());
-        Worklist.push_back({Store, valNode, ptrNode});
-    }
-}
-
-void PointerAnalysis::visitLoadInst(LoadInst &LI)
-{
-    Value *ptr = LI.getPointerOperand();
-    if (LI.getType()->isPointerTy())
-    {
-        Node *ptrNode = getOrCreateNode(ptr, getContext());
-        Node *loadNode = getOrCreateNode(&LI, getContext());
-        Worklist.push_back({Load, ptrNode, loadNode});
-    }
+    Worklist.push_back({Assign, UINT64_MAX, aiNode->id}); // Points to self
 }
 
 void PointerAnalysis::visitBitCastInst(BitCastInst &BC)
 {
+    if (DebugMode)
+        errs() << "Processing bitcast: " << BC << "\n";
+
     if (BC.getType()->isPointerTy())
     {
         Value *basePtr = BC.getOperand(0);
         Node *basePtrNode = getOrCreateNode(basePtr, getContext());
         Node *bcNode = getOrCreateNode(&BC, getContext());
-        Worklist.push_back({Assign, basePtrNode, bcNode});
+        Worklist.push_back({Assign, basePtrNode->id, bcNode->id});
+    }
+}
+
+void PointerAnalysis::visitStoreInst(StoreInst &SI)
+{
+    if (DebugMode)
+        errs() << "Processing store: " << SI << "\n";
+
+    Value *val = SI.getValueOperand();
+    Value *ptr = SI.getPointerOperand();
+
+    // Field-sensitive: extract indices if ptr is a GEP
+    std::vector<uint64_t> indices;
+    if (auto *gep = dyn_cast<GetElementPtrInst>(ptr))
+    {
+        for (auto idx = gep->idx_begin(); idx != gep->idx_end(); ++idx)
+        {
+            if (auto *constIdx = dyn_cast<ConstantInt>(idx))
+                indices.push_back(constIdx->getZExtValue());
+            else
+                indices.push_back(~0ULL); // Unknown index
+        }
+    }
+
+    if (val->getType()->isPointerTy())
+    {
+        Node *valNode = getOrCreateNode(val, getContext());
+        Node *ptrNode = getOrCreateNode(ptr, getContext(), indices);
+        Worklist.push_back({Store, valNode->id, ptrNode->id});
+
+        if (DebugMode)
+            printLastConstraint();
+    }
+}
+
+void PointerAnalysis::visitLoadInst(LoadInst &LI)
+{
+    if (DebugMode)
+        errs() << "Processing load: " << LI << "\n";
+
+    Value *ptr = LI.getPointerOperand();
+
+    // Field-sensitive: extract indices if ptr is a GEP
+    std::vector<uint64_t> indices;
+    if (auto *gep = dyn_cast<GetElementPtrInst>(ptr))
+    {
+        for (auto idx = gep->idx_begin(); idx != gep->idx_end(); ++idx)
+        {
+            if (auto *constIdx = dyn_cast<ConstantInt>(idx))
+                indices.push_back(constIdx->getZExtValue());
+            else
+                indices.push_back(~0ULL); // Unknown index
+        }
+    }
+
+    if (LI.getType()->isPointerTy())
+    {
+        Node *ptrNode = getOrCreateNode(ptr, getContext(), indices);
+        Node *loadNode = getOrCreateNode(&LI, getContext());
+        Worklist.push_back({Load, ptrNode->id, loadNode->id});
+
+        if (DebugMode)
+            printLastConstraint();
     }
 }
 
 void PointerAnalysis::visitGetElementPtrInst(GetElementPtrInst &GEP)
 {
+    if (DebugMode)
+        errs() << "Processing GEP: " << GEP << "\n";
+
     if (GEP.getType()->isPointerTy())
     {
         Value *basePtr = GEP.getPointerOperand();
-        Node *basePtrNode = getOrCreateNode(basePtr, getContext());
-        Node *gepNode = getOrCreateNode(&GEP, getContext());
-        Worklist.push_back({Assign, basePtrNode, gepNode});
-
         // Handle struct field or array access
+        std::vector<uint64_t> indices;
         for (auto idx = GEP.idx_begin(); idx != GEP.idx_end(); ++idx)
         {
             if (auto *constIdx = dyn_cast<ConstantInt>(idx))
-            {
-                // errs() << "GEP index: " << constIdx->getValue() << "\n";
-
-                // Generate constraints for array or struct field access
-                // For simplicity, treat all derived pointers as pointing to the base
-                Node *basePtrNode = getOrCreateNode(basePtr, getContext());
-                Node *gepNode = getOrCreateNode(&GEP, getContext());
-                Worklist.push_back({Assign, basePtrNode, gepNode});
-            }
+                indices.push_back(constIdx->getZExtValue());
             else
-            {
-                // errs() << "GEP index is not a constant.\n";
-
-                // Non-constant index: conservatively assume it may point anywhere
-                Node *basePtrNode = getOrCreateNode(basePtr, getContext());
-                Node *gepNode = getOrCreateNode(&GEP, getContext());
-                Worklist.push_back({Assign, basePtrNode, gepNode});
-            }
+                indices.push_back(~0ULL); // Unknown index
         }
+        Node *basePtrNode = getOrCreateNode(basePtr, getContext());
+        Node *gepNode = getOrCreateNode(&GEP, getContext(), indices);
+        Worklist.push_back({Assign, basePtrNode->id, gepNode->id});
+
+        if (DebugMode)
+            printLastConstraint();
+    }
+}
+
+void PointerAnalysis::visitExtractValueInst(ExtractValueInst &EVI)
+{
+    if (DebugMode)
+        errs() << "Processing extractvalue: " << EVI << "\n";
+
+    if (EVI.getType()->isPointerTy())
+    {
+        Value *aggregate = EVI.getAggregateOperand();
+        Node *aggNode = getOrCreateNode(aggregate, getContext());
+        Node *resultNode = getOrCreateNode(&EVI, getContext());
+        Worklist.push_back({Assign, aggNode->id, resultNode->id});
+
+        if (DebugMode)
+            printLastConstraint();
     }
 }
 
 void PointerAnalysis::visitPHINode(PHINode &PN)
 {
+    if (DebugMode)
+        errs() << "Processing PHINode: " << PN << "\n";
+
     if (PN.getType()->isPointerTy())
     {
         for (unsigned i = 0; i < PN.getNumIncomingValues(); ++i)
@@ -442,35 +515,44 @@ void PointerAnalysis::visitPHINode(PHINode &PN)
             Value *incoming = PN.getIncomingValue(i);
             Node *incomingNode = getOrCreateNode(incoming, getContext());
             Node *PNNode = getOrCreateNode(&PN, getContext());
-            Worklist.push_back({Assign, incomingNode, PNNode});
+            Worklist.push_back({Assign, incomingNode->id, PNNode->id});
         }
     }
 }
 
 void PointerAnalysis::visitAtomicRMWInst(AtomicRMWInst &ARMW)
 {
+    if (DebugMode)
+        errs() << "Processing atomic RMW: " << ARMW << "\n";
+
     Value *ptr = ARMW.getPointerOperand();
     if (ptr->getType()->isPointerTy())
     {
         Node *ptrNode = getOrCreateNode(ptr, getContext());
         Node *valNode = getOrCreateNode(ARMW.getValOperand(), getContext());
-        Worklist.push_back({Store, valNode, ptrNode});
+        Worklist.push_back({Store, valNode->id, ptrNode->id});
     }
 }
 
 void PointerAnalysis::visitAtomicCmpXchgInst(AtomicCmpXchgInst &ACX)
 {
+    if (DebugMode)
+        errs() << "Processing atomic compare-and-swap: " << ACX << "\n";
+
     Value *ptr = ACX.getPointerOperand();
     if (ptr->getType()->isPointerTy())
     {
         Node *ptrNode = getOrCreateNode(ptr, getContext());
         Node *newValNode = getOrCreateNode(ACX.getNewValOperand(), getContext());
-        Worklist.push_back({Store, newValNode, ptrNode});
+        Worklist.push_back({Store, newValNode->id, ptrNode->id});
     }
 }
 
 void PointerAnalysis::visitInvokeInst(InvokeInst &II)
 {
+    if (DebugMode)
+        errs() << "Processing invoke: " << II << "\n";
+
     Function *calledFn = II.getCalledFunction();
     if (calledFn) // handle direct calls
     {
@@ -487,7 +569,7 @@ void PointerAnalysis::visitInvokeInst(InvokeInst &II)
                 Node *argNode = getOrCreateNode(arg, CurrentContext);
                 Argument *param = calledFn->getArg(i);
                 Node *paramNode = getOrCreateNode(param, CurrentContext);
-                Worklist.push_back({Assign, argNode, paramNode});
+                Worklist.push_back({Assign, argNode->id, paramNode->id});
             }
         }
 
@@ -500,20 +582,26 @@ void PointerAnalysis::visitInvokeInst(InvokeInst &II)
         {
             Node *calledFnNode = getOrCreateNode(calledFn, CurrentContext);
             Node *returnNode = getOrCreateNode(&II, CurrentContext);
-            Worklist.push_back({Assign, calledFnNode, returnNode});
+            Worklist.push_back({Assign, calledFnNode->id, returnNode->id});
         }
     }
 
     // Handle indirect calls (e.g., via vtable)
     Value *calledValue = II.getCalledOperand();
-    if (calledValue->getType()->isPointerTy())
+    if (!calledFn && calledValue->getType()->isPointerTy())
     {
         // Handle indirect calls
         Node *calledValueNode = getOrCreateNode(calledValue, CurrentContext);
-        auto &targets = pointsToMap[calledValueNode];
-        for (Node *target : targets)
+        auto &target_ids = calledValueNode->pts;
+        for (uint64_t target_id : target_ids)
         {
-            if (Function *indirectFn = dyn_cast<Function>(target->value))
+            auto target = idToNodeMap.find(target_id);
+            if (target == idToNodeMap.end())
+            {
+                errs() << "Warning: Target ID " << target_id << " not found in idToNodeMap.\n";
+                continue; // Skip if target not found
+            }
+            if (Function *indirectFn = dyn_cast<Function>(target->second->value))
             {
                 // // Debugging: Print II, calledValue, and target
                 // errs() << "InvokeInst: " << *II << "\n";
@@ -533,7 +621,7 @@ void PointerAnalysis::visitInvokeInst(InvokeInst &II)
                         Node *argNode = getOrCreateNode(arg, CurrentContext);
                         Argument *param = indirectFn->getArg(i);
                         Node *paramNode = getOrCreateNode(param, CurrentContext);
-                        Worklist.push_back({Assign, argNode, paramNode});
+                        Worklist.push_back({Assign, argNode->id, paramNode->id});
                     }
                 }
 
@@ -546,7 +634,7 @@ void PointerAnalysis::visitInvokeInst(InvokeInst &II)
                 {
                     Node *indirectFnNode = getOrCreateNode(indirectFn, CurrentContext);
                     Node *returnNode = getOrCreateNode(&II, CurrentContext);
-                    Worklist.push_back({Assign, indirectFnNode, returnNode});
+                    Worklist.push_back({Assign, indirectFnNode->id, returnNode->id});
                 }
             }
         }
@@ -555,11 +643,14 @@ void PointerAnalysis::visitInvokeInst(InvokeInst &II)
 
 void PointerAnalysis::visitCallInst(CallInst &CI)
 {
+    if (DebugMode)
+        errs() << "Processing call: " << CI << "\n";
+
     Function *calledFn = CI.getCalledFunction();
-    
+
     // Handle channel operations first
     handleChannelOperation(CI);
-    
+
     if (calledFn)
     {
         // Add to the call graph
@@ -575,7 +666,7 @@ void PointerAnalysis::visitCallInst(CallInst &CI)
                 Node *argNode = getOrCreateNode(arg, CurrentContext);
                 Argument *param = calledFn->getArg(i);
                 Node *paramNode = getOrCreateNode(param, CurrentContext);
-                Worklist.push_back({Assign, argNode, paramNode});
+                Worklist.push_back({Assign, argNode->id, paramNode->id});
             }
         }
 
@@ -587,7 +678,7 @@ void PointerAnalysis::visitCallInst(CallInst &CI)
         {
             Node *calledFnNode = getOrCreateNode(calledFn, CurrentContext);
             Node *returnNode = getOrCreateNode(&CI, CurrentContext);
-            Worklist.push_back({Assign, calledFnNode, returnNode});
+            Worklist.push_back({Assign, calledFnNode->id, returnNode->id});
         }
     }
     else if (CI.isInlineAsm())
@@ -601,24 +692,31 @@ void PointerAnalysis::visitCallInst(CallInst &CI)
 void PointerAnalysis::handleChannelOperation(CallInst &CI)
 {
     // Check if this is a channel operation first
-    if (channelSemantics.isChannelOperation(&CI)) {
-        ChannelOperation* channelOp = channelSemantics.analyzeChannelCall(&CI, CurrentContext);
-        if (channelOp) {
+    if (channelSemantics.isChannelOperation(&CI))
+    {
+        if (DebugMode)
+            errs() << "Processing channel operation: " << CI << "\n";
+
+        ChannelOperation *channelOp = channelSemantics.analyzeChannelCall(&CI, CurrentContext);
+        if (channelOp)
+        {
             channelSemantics.channel_operations.push_back(channelOp);
-            
-            if (DebugMode) {
+
+            if (DebugMode)
+            {
                 Function *caller = CI.getFunction(); // Get the caller function
                 errs() << "Detected channel operation: ";
-                switch (channelOp->operation) {
-                    case ChannelOperation::SEND:
-                        errs() << "SEND";
-                        break;
-                    case ChannelOperation::RECV:
-                        errs() << "RECV";
-                        break;
-                    case ChannelOperation::CHANNEL_CREATE:
-                        errs() << "CREATE";
-                        break;
+                switch (channelOp->operation)
+                {
+                case ChannelOperation::SEND:
+                    errs() << "SEND";
+                    break;
+                case ChannelOperation::RECV:
+                    errs() << "RECV";
+                    break;
+                case ChannelOperation::CHANNEL_CREATE:
+                    errs() << "CREATE";
+                    break;
                 }
                 errs() << " in function: " << caller->getName() << "\n";
             }
@@ -628,6 +726,18 @@ void PointerAnalysis::handleChannelOperation(CallInst &CI)
 
 void PointerAnalysis::visitInstruction(Instruction &I)
 {
+
+    if (isa<LandingPadInst>(&I) || isa<TruncInst>(&I) || isa<ZExtInst>(&I) ||
+        isa<SExtInst>(&I) || isa<FPTruncInst>(&I) || isa<FPExtInst>(&I) ||
+        isa<UIToFPInst>(&I) || isa<SIToFPInst>(&I) || isa<FPToUIInst>(&I) ||
+        isa<FPToSIInst>(&I) || isa<IntToPtrInst>(&I) || isa<PtrToIntInst>(&I) || // TODO: maybe handle these
+        isa<BranchInst>(&I) || isa<SwitchInst>(&I) || isa<ReturnInst>(&I) ||
+        isa<CmpInst>(&I) || isa<SelectInst>(&I) || isa<InsertValueInst>(&I) ||
+        isa<ExtractElementInst>(&I) || isa<InsertElementInst>(&I) || isa<UnreachableInst>(&I) || isa<ResumeInst>(&I))
+    { // Ignore these instructions for pointer analysis
+        return;
+    }
+
     // fallback for unhandled instructions
     if (DebugMode)
         errs() << "Unhandled instruction: " << I << "\n";
@@ -639,66 +749,67 @@ void PointerAnalysis::solveConstraints()
     while (changed)
     {
         changed = false;
-        
+
         // Process all constraints in the worklist
         for (const auto &constraint : Worklist)
         {
-            if (!constraint.dst)
+            if (constraint.dst_id == UINT64_MAX)
                 continue;
 
             switch (constraint.type)
             {
             case Assign:
-                if (constraint.src == nullptr)
+                if (constraint.src_id == UINT64_MAX)
                 {
                     // Allocate: Points to self
-                    if (pointsToMap[constraint.dst].insert(constraint.dst).second)
+                    if (idToNodeMap[constraint.dst_id]->pts.insert(constraint.dst_id).second)
                         changed = true;
                 }
                 else
                 {
                     // Propagate: dst may point to whatever src points to
-                    auto &srcSet = pointsToMap[constraint.src];
-                    auto &dstSet = pointsToMap[constraint.dst];
+                    auto &src = idToNodeMap[constraint.src_id];
+                    auto &dst = idToNodeMap[constraint.dst_id];
 
-                    for (Node *target : srcSet)
+                    for (auto target_id : src->pts)
                     {
-                        if (dstSet.insert(target).second)
+                        if (dst->pts.insert(target_id).second)
                             changed = true;
                     }
                 }
                 break;
 
             case Store:
-                if (constraint.src)
+                if (constraint.src_id != UINT64_MAX)
                 {
-                    auto &srcSet = pointsToMap[constraint.src];
-                    auto &dstSet = pointsToMap[constraint.dst];
+                    auto &src = idToNodeMap[constraint.src_id];
+                    auto &dst = idToNodeMap[constraint.dst_id];
 
-                    for (Node *target : srcSet)
+                    for (auto target_id : src->pts)
                     {
-                        if (dstSet.insert(target).second)
+                        if (dst->pts.insert(target_id).second)
                             changed = true;
                     }
                 }
                 break;
 
             case Load:
-                if (constraint.src)
+                if (constraint.src_id != UINT64_MAX)
                 {
-                    auto &srcSet = pointsToMap[constraint.src];
-                    auto &dstSet = pointsToMap[constraint.dst];
+                    auto &src = idToNodeMap[constraint.src_id];
+                    auto &dst = idToNodeMap[constraint.dst_id];
 
-                    for (Node *target : srcSet)
+                    for (auto target_id : src->pts)
                     {
-                        if (dstSet.insert(target).second)
+                        if (dst->pts.insert(target_id).second)
                             changed = true;
                     }
                 }
                 break;
-                
+
             case Channel:
-                if (handleChannelConstraints()) {
+                if (handleChannelConstraints())
+                {
                     changed = true;
                 }
                 break;
@@ -711,29 +822,31 @@ bool PointerAnalysis::handleChannelConstraints()
 {
     // Channel operations have already been collected during the main analysis
     // in visitCallInst. This function processes and applies channel constraints.
-    
-    if (DebugMode) {
+
+    if (DebugMode)
+    {
         errs() << "=== Processing Channel Constraints ===\n";
-        errs() << "Found " << channelSemantics.channel_operations.size() 
+        errs() << "Found " << channelSemantics.channel_operations.size()
                << " channel operations\n";
-        errs() << "Found " << channelSemantics.channel_map.size() 
+        errs() << "Found " << channelSemantics.channel_map.size()
                << " channel mappings\n";
-        errs() << "Found " << channelSemantics.channels.size() 
+        errs() << "Found " << channelSemantics.channels.size()
                << " channel instances\n";
     }
-    
+
     // Apply channel-specific constraints to the pointer analysis
     // This function returns whether any new constraints were added
     size_t oldWorklistSize = Worklist.size();
     channelSemantics.applyChannelConstraints(this);
-    
+
     bool constraintsAdded = (Worklist.size() > oldWorklistSize);
-    
-    if (DebugMode && constraintsAdded) {
-        errs() << "Added " << (Worklist.size() - oldWorklistSize) 
+
+    if (DebugMode && constraintsAdded)
+    {
+        errs() << "Added " << (Worklist.size() - oldWorklistSize)
                << " channel constraints to worklist\n";
     }
-    
+
     return constraintsAdded;
 }
 
@@ -751,7 +864,7 @@ bool PointerAnalysis::parseInputDir(Module &M)
 bool PointerAnalysis::parseOutputDir(Module &M)
 {
     if (inputDir.empty())
-    {   
+    {
         parseInputDir(M); // Ensure inputDir is set
     }
 
@@ -764,19 +877,14 @@ bool PointerAnalysis::parseOutputDir(Module &M)
     return true;
 }
 
-const PointerAnalysis::PointsToMapTy &PointerAnalysis::getPointsToMap() const
-{
-    return pointsToMap;
-}
-
 const void PointerAnalysis::printStatistics()
 {
     // PointsToMap statistics
-    size_t numNodes = pointsToMap.size();
+    size_t numNodes = idToNodeMap.size();
     size_t numEdges = 0;
-    for (const auto &entry : pointsToMap)
+    for (const auto &entry : idToNodeMap)
     {
-        numEdges += entry.second.size();
+        numEdges += entry.second->pts.size();
     }
 
     // Visited functions
@@ -786,28 +894,26 @@ const void PointerAnalysis::printStatistics()
     errs() << "PointsToMap: " << numNodes << " nodes, " << numEdges << " edges\n";
     errs() << "CallGraph: " << callGraph.numNodes() << " nodes, " << callGraph.numEdges() << " edges\n";
     errs() << "Visited functions: " << numVisitedFunctions << "\n";
-    
+
     // Print channel semantics statistics
     channelSemantics.printChannelInfo(errs());
-    
+
     errs() << "==================================\n";
 }
 
-
-// Iterate through the points-to map and print the results
+// Iterate through the points-to map and print the results: full version
 void PointerAnalysis::printPointsToMap(std::ofstream &outFile) const
 {
     outFile << "\n\n\n\nPointer Analysis Results:\n";
-    const auto &ptm = getPointsToMap();
-    for (const auto &entry : ptm)
+    for (const auto &entry : idToNodeMap)
     {
         std::string pointerStr;
         llvm::raw_string_ostream pointerStream(pointerStr);
-        pointerStream << *entry.first; // Use LLVM's raw_ostream to print the pointer
+        pointerStream << *entry.second; // Use LLVM's raw_ostream to print the pointer
         pointerStream.flush();
 
         // skip printing function pointers
-        if (entry.first->value->getType()->isFunctionTy())
+        if (entry.second->value->getType()->isFunctionTy())
         {
             outFile << "Skipping function pointer: " << pointerStr << "\n";
             continue;
@@ -815,15 +921,22 @@ void PointerAnalysis::printPointsToMap(std::ofstream &outFile) const
 
         outFile << "Pointer: " << pointerStr << "\n";
 
-        for (auto *target : entry.second)
+        for (auto target_id : entry.second->pts)
         {
             std::string targetStr;
             llvm::raw_string_ostream targetStream(targetStr);
-            targetStream << *target; // Use LLVM's raw_ostream to print the target
+            auto it = idToNodeMap.find(target_id);
+            if (it != idToNodeMap.end() && it->second)
+            {
+                targetStream << *(it->second);
+                targetStream.flush();
+                outFile << "  -> " << targetStr << "\n";
+            }
+            else
+            {
+                outFile << "  -> [Unknown Node id=" << target_id << "]\n";
+            }
             targetStream.flush();
-
-            outFile << "  -> " << targetStr << "\n";
         }
     }
 }
-
