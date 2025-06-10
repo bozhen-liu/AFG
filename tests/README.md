@@ -141,14 +141,24 @@ framework.assert_greater_than(actual, expected, "message");
 ##### Advanced Correctness Assertions
 
 ```cpp
-// Validate specific function instance counts (context-sensitive behavior)
-framework.assert_function_instance_count("function_name", expected_count, "message", result);
-
-// Validate context differentiation between analysis modes
-framework.assert_context_differentiation("function_name", {"context1", "context2"}, "message", result);
-
-// Validate call graph structure precision
+// Direct data structure access assertions
+framework.assert_points_to_map_size(expected_size, "message", result);
 framework.assert_call_graph_nodes_count(expected_nodes, "message", result);
+framework.assert_call_graph_edges_count(expected_edges, "message", result);
+framework.assert_visited_functions_count(expected_count, "message", result);
+
+// Comparative assertions
+framework.assert_points_to_map_size_greater_than(threshold, "message", result);
+framework.assert_call_graph_nodes_count_greater_than(threshold, "message", result);
+framework.assert_call_graph_edges_count_greater_than(threshold, "message", result);
+
+// Function presence validation
+framework.assert_function_in_call_graph("function_name", "message", result);
+framework.assert_function_in_visited_set("function_name", "message", result);
+
+// Legacy assertion methods (still available)
+framework.assert_function_instance_count("function_name", expected_count, "message", result);
+framework.assert_context_differentiation("function_name", {"context1", "context2"}, "message", result);
 
 // Print detailed analysis breakdown for debugging
 framework.print_detailed_analysis(result);
@@ -156,18 +166,24 @@ framework.print_detailed_analysis(result);
 
 #### Detailed Analysis Results
 
-The framework now provides comprehensive analysis details:
+The framework provides comprehensive analysis details with direct access to analysis data structures:
 
 ```cpp
 struct TestResult {
     bool passed;
-    size_t points_to_nodes;                              // Points-to graph size
-    size_t call_graph_nodes;                             // Call graph precision
-    size_t call_graph_edges;                            // Call relationships
-    size_t visited_functions;                           // Function coverage
-    std::map<std::string, int> function_instance_counts; // Context instances per function
-    std::vector<std::string> function_contexts;         // All context strings
-    std::string raw_output;                             // Complete analysis output
+    std::string message;
+    std::string expected;
+    std::string actual;
+    
+    // Direct access to analysis data structures
+    PointerAnalysis::PointsToMapTy pointsToMap;           // Direct access to points-to map
+    CallGraph callGraph;                                  // Direct access to call graph
+    std::unordered_set<Function *> visitedFunctions;     // Direct access to visited functions
+    
+    // Derived information computed from analysis data structures
+    std::map<std::string, int> function_instance_counts;  // Function name -> number of instances
+    std::vector<std::string> function_contexts;           // All function contexts found
+    std::string raw_output;                               // Complete analysis output for debugging
 };
 ```
 
@@ -179,7 +195,8 @@ struct TestResult {
 framework.start_test("Basic Store/Load Analysis");
 auto result = framework.runPointerAnalysis("pointer/simple.ll");
 framework.assert_true(result.passed, "Analysis should complete");
-framework.assert_contains(result.actual, "PointsToMap:", "Should report results");
+framework.assert_points_to_map_size_greater_than(0, "Should create points-to relationships", result);
+framework.assert_call_graph_nodes_count_greater_than(0, "Should create call graph nodes", result);
 ```
 
 ### Channel Semantics Test
@@ -188,6 +205,7 @@ framework.assert_contains(result.actual, "PointsToMap:", "Should report results"
 framework.start_test("Channel Creation Detection");
 auto result = framework.runPointerAnalysis("channel/channel_create_test.ll");
 framework.assert_true(result.passed, "Channel creation analysis should succeed");
+framework.assert_call_graph_nodes_count_greater_than(0, "Should create call graph nodes for channel operations", result);
 framework.assert_contains(result.actual, "Channels:", "Should detect channel instances");
 ```
 
@@ -200,9 +218,17 @@ framework.start_test("Basic vs K-Callsite Correctness Comparison");
 auto basic_result = framework.runPointerAnalysis("pointer/simple.ll", "basic");
 auto kcs_result = framework.runPointerAnalysis("pointer/simple.ll", "kcs", 2);
 
-// Validate correctness differences
+// Validate correctness differences using direct data structure access
 framework.assert_function_instance_count("callee", 1, "Basic analysis should merge all callee instances", basic_result);
 framework.assert_function_instance_count("callee", 2, "K=2 analysis should differentiate callee contexts", kcs_result);
+
+// Validate precision using direct access to call graph
+framework.assert_true(kcs_result.callGraph.numNodes() >= basic_result.callGraph.numNodes(),
+                     "K-callsite should maintain or increase call graph precision");
+
+// Validate that functions are present in call graph
+framework.assert_function_in_call_graph("callee", "Callee should be in call graph", kcs_result);
+framework.assert_function_in_visited_set("callee", "Callee should be visited", kcs_result);
 
 // Validate context differentiation
 std::vector<std::string> expected_contexts = {"caller1", "caller2"};
@@ -221,13 +247,17 @@ framework.start_test("Cross-Analysis Consistency Validation");
 auto basic_result = framework.runPointerAnalysis("test.ll", "basic");
 auto kcs_result = framework.runPointerAnalysis("test.ll", "kcs", 2);
 
-// Validate consistency
-framework.assert_true(basic_result.visited_functions == kcs_result.visited_functions,
-                    "Both analyses should visit the same functions");
+// Validate consistency using direct data structure access
+framework.assert_visited_functions_count(basic_result.visitedFunctions.size(),
+                                        "K-callsite should visit same number of functions as basic", kcs_result);
 
-// Validate precision improvement
-framework.assert_true(kcs_result.call_graph_nodes >= basic_result.call_graph_nodes,
+// Validate precision improvement using direct access
+framework.assert_true(kcs_result.callGraph.numNodes() >= basic_result.callGraph.numNodes(),
                     "Context-sensitive analysis should maintain or increase precision");
+
+// Additional direct validations
+framework.assert_points_to_map_size_greater_than(0, "Should create points-to relationships", kcs_result);
+framework.assert_call_graph_edges_count_greater_than(0, "Should create call graph edges", kcs_result);
 ```
 
 ## Expected Output Format

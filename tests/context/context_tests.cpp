@@ -37,11 +37,11 @@ void run_context_tests(AFGTestFramework& framework) {
         
         // Print detailed comparison
         std::cout << "  Context Analysis Comparison:" << std::endl;
-        std::cout << "    Basic: " << basic_result.call_graph_nodes << " CG nodes, callee instances: " 
+        std::cout << "    Basic: " << basic_result.callGraph.numNodes() << " CG nodes, callee instances: " 
                   << (basic_result.function_instance_counts.find("callee") != basic_result.function_instance_counts.end() ? 
                       basic_result.function_instance_counts.at("callee") : 0) << std::endl;
-        std::cout << "    K=1: " << k1_result.call_graph_nodes << " CG nodes, callee instances: " << k1_count << std::endl;
-        std::cout << "    K=2: " << k2_result.call_graph_nodes << " CG nodes, callee instances: " << k2_count << std::endl;
+        std::cout << "    K=1: " << k1_result.callGraph.numNodes() << " CG nodes, callee instances: " << k1_count << std::endl;
+        std::cout << "    K=2: " << k2_result.callGraph.numNodes() << " CG nodes, callee instances: " << k2_count << std::endl;
     }
     
     // Test 2: Context Propagation Validation
@@ -57,15 +57,15 @@ void run_context_tests(AFGTestFramework& framework) {
                             "All context propagation analyses should succeed");
         
         // Deeper call chains should benefit more from higher K values
-        framework.assert_true(k3_result.call_graph_nodes >= k2_result.call_graph_nodes, 
+        framework.assert_true(k3_result.callGraph.numNodes() >= k2_result.callGraph.numNodes(), 
                             "Higher K should capture more call graph precision in deep chains");
-        framework.assert_true(k2_result.call_graph_nodes >= basic_result.call_graph_nodes, 
+        framework.assert_true(k2_result.callGraph.numNodes() >= basic_result.callGraph.numNodes(), 
                             "Context-sensitive analysis should be at least as precise as basic");
         
         std::cout << "  Call Chain Analysis:" << std::endl;
-        std::cout << "    Basic: " << basic_result.call_graph_nodes << " nodes, " << basic_result.call_graph_edges << " edges" << std::endl;
-        std::cout << "    K=2: " << k2_result.call_graph_nodes << " nodes, " << k2_result.call_graph_edges << " edges" << std::endl;
-        std::cout << "    K=3: " << k3_result.call_graph_nodes << " nodes, " << k3_result.call_graph_edges << " edges" << std::endl;
+        std::cout << "    Basic: " << basic_result.callGraph.numNodes() << " nodes, " << basic_result.callGraph.numEdges() << " edges" << std::endl;
+        std::cout << "    K=2: " << k2_result.callGraph.numNodes() << " nodes, " << k2_result.callGraph.numEdges() << " edges" << std::endl;
+        std::cout << "    K=3: " << k3_result.callGraph.numNodes() << " nodes, " << k3_result.callGraph.numEdges() << " edges" << std::endl;
     }
     
     // Test 3: Recursive Function Context Handling Validation
@@ -80,11 +80,11 @@ void run_context_tests(AFGTestFramework& framework) {
         
         // Should handle recursive calls without infinite expansion
         // Both analyses should visit the same functions but potentially with different contexts
-        framework.assert_true(basic_result.visited_functions == kcs_result.visited_functions, 
-                            "Both analyses should visit the same set of functions in recursive cases");
+        framework.assert_visited_functions_count(basic_result.visitedFunctions.size(), 
+                                                "K-callsite should visit same number of functions as basic", kcs_result);
         
         // K-callsite may create more call graph nodes due to context differentiation
-        framework.assert_true(kcs_result.call_graph_nodes >= basic_result.call_graph_nodes, 
+        framework.assert_true(kcs_result.callGraph.numNodes() >= basic_result.callGraph.numNodes(), 
                             "K-callsite should maintain or increase precision for recursive functions");
     }
     
@@ -99,11 +99,11 @@ void run_context_tests(AFGTestFramework& framework) {
         framework.assert_true(kcs_result.passed, "K-callsite function pointer analysis should succeed");
         
         // Function pointer calls should be handled correctly in both modes
-        framework.assert_true(basic_result.call_graph_edges > 0, "Should detect indirect calls in basic analysis");
-        framework.assert_true(kcs_result.call_graph_edges > 0, "Should detect indirect calls in k-callsite analysis");
+        framework.assert_call_graph_edges_count_greater_than(0, "Should detect indirect calls in basic analysis", basic_result);
+        framework.assert_call_graph_edges_count_greater_than(0, "Should detect indirect calls in k-callsite analysis", kcs_result);
         
         // K-callsite may distinguish between different calling contexts for the same function pointer
-        framework.assert_true(kcs_result.call_graph_nodes >= basic_result.call_graph_nodes, 
+        framework.assert_true(kcs_result.callGraph.numNodes() >= basic_result.callGraph.numNodes(), 
                             "K-callsite should handle function pointers with proper context sensitivity");
     }
     
@@ -120,16 +120,16 @@ void run_context_tests(AFGTestFramework& framework) {
                             "All K-value analyses should succeed");
         
         // Generally, higher K should not decrease precision
-        framework.assert_true(k2_result.call_graph_nodes >= k1_result.call_graph_nodes, 
+        framework.assert_true(k2_result.callGraph.numNodes() >= k1_result.callGraph.numNodes(), 
                             "K=2 should be at least as precise as K=1");
-        framework.assert_true(k4_result.call_graph_nodes >= k2_result.call_graph_nodes, 
+        framework.assert_true(k4_result.callGraph.numNodes() >= k2_result.callGraph.numNodes(), 
                             "K=4 should be at least as precise as K=2");
         
         // Show the progression of precision with K value
         std::cout << "  K-value Precision Progression:" << std::endl;
-        std::cout << "    K=1: " << k1_result.call_graph_nodes << " nodes, " << k1_result.points_to_nodes << " points-to nodes" << std::endl;
-        std::cout << "    K=2: " << k2_result.call_graph_nodes << " nodes, " << k2_result.points_to_nodes << " points-to nodes" << std::endl;
-        std::cout << "    K=4: " << k4_result.call_graph_nodes << " nodes, " << k4_result.points_to_nodes << " points-to nodes" << std::endl;
+        std::cout << "    K=1: " << k1_result.callGraph.numNodes() << " nodes, " << k1_result.pointsToMap.size() << " points-to nodes" << std::endl;
+        std::cout << "    K=2: " << k2_result.callGraph.numNodes() << " nodes, " << k2_result.pointsToMap.size() << " points-to nodes" << std::endl;
+        std::cout << "    K=4: " << k4_result.callGraph.numNodes() << " nodes, " << k4_result.pointsToMap.size() << " points-to nodes" << std::endl;
     }
     
     // Test 6: Context String Format Validation

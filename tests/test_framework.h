@@ -36,11 +36,12 @@ public:
         std::string expected;
         std::string actual;
         
-        // Detailed analysis information
-        size_t points_to_nodes;
-        size_t call_graph_nodes;
-        size_t call_graph_edges;
-        size_t visited_functions;
+        // Direct access to analysis data structures
+        PointerAnalysis::PointsToMapTy pointsToMap;           // Direct access to points-to map
+        CallGraph callGraph;                                  // Direct access to call graph
+        std::unordered_set<Function *> visitedFunctions;     // Direct access to visited functions
+        
+        // Derived information computed from analysis data structures
         std::map<std::string, int> function_instance_counts;  // Function name -> number of instances
         std::vector<std::string> function_contexts;           // All function contexts found
         std::string raw_output;                               // Complete analysis output for debugging
@@ -65,7 +66,13 @@ public:
     TestResult runPointerAnalysis(const std::string& ir_file, const std::string& analysis_mode = "basic", unsigned k_value = 1) {
         auto module = loadModule(ir_file);
         if (!module) {
-            return {false, "Failed to load IR module", "", "", 0, 0, 0, 0, {}, {}, ""};
+            TestResult errorResult;
+            errorResult.passed = false;
+            errorResult.message = "Failed to load IR module";
+            errorResult.expected = "";
+            errorResult.actual = "";
+            errorResult.raw_output = "";
+            return errorResult;
         }
         
         std::unique_ptr<PointerAnalysis> PA;
@@ -80,16 +87,13 @@ public:
         PA->DebugMode = false; // Disable debug for cleaner test output
         PA->analyze(*module);
         
-        // Capture basic metrics
-        const auto& pointsToMap = PA->getPointsToMap();
-        const auto& callGraph = PA->getCallGraph();
-        
+        // Store actual data structures
         TestResult result;
         result.passed = true;
         result.message = "Analysis completed successfully";
-        result.points_to_nodes = pointsToMap.size();
-        result.call_graph_edges = callGraph.numEdges();
-        result.visited_functions = PA->getVisitedFunctions().size();
+        result.pointsToMap = PA->getPointsToMap();
+        result.callGraph = PA->getCallGraph();
+        result.visitedFunctions = PA->getVisitedFunctions();
         
         // Extract detailed call graph information
         std::map<std::string, int> function_counts;
@@ -97,13 +101,13 @@ public:
         std::stringstream detailed_output;
         
         detailed_output << "=== Detailed Call Graph Analysis ===\n";
-        detailed_output << "Points-to nodes: " << result.points_to_nodes << "\n";
+        detailed_output << "Points-to nodes: " << result.pointsToMap.size() << "\n";
         
         // We need to iterate through ALL nodes, not just those with outgoing edges
         // The graph only contains nodes with outgoing edges, but we want all nodes
         // We'll iterate through all possible node IDs from 0 to find all created nodes
         int maxNodeId = -1;
-        const auto& graph = callGraph.getGraph();
+        const auto& graph = result.callGraph.getGraph();
         
         // First, find the maximum node ID from the graph edges
         for (const auto& entry : graph) {
@@ -115,7 +119,7 @@ public:
         
         // Now iterate through all possible node IDs to find all nodes
         for (int nodeId = 0; nodeId <= maxNodeId; ++nodeId) {
-            const CGNode& node = callGraph.getNode(nodeId);
+            const CGNode& node = result.callGraph.getNode(nodeId);
             
             if (node.function && node.function != nullptr) {
                 std::string funcName = node.function->getName().str();
@@ -132,19 +136,16 @@ public:
             }
         }
         
-        // Update call graph nodes count based on actual nodes found
-        result.call_graph_nodes = function_counts.size();
-        
-        detailed_output << "Call graph nodes: " << result.call_graph_nodes << "\n";
-        detailed_output << "Call graph edges: " << result.call_graph_edges << "\n";
-        detailed_output << "Visited functions: " << result.visited_functions << "\n\n";
+        detailed_output << "Call graph nodes: " << result.callGraph.numNodes() << "\n";
+        detailed_output << "Call graph edges: " << result.callGraph.numEdges() << "\n";
+        detailed_output << "Visited functions: " << result.visitedFunctions.size() << "\n\n";
         
         // Analyze call graph nodes and their contexts
         detailed_output << "=== Call Graph Nodes with Contexts ===\n";
         
         // Re-iterate to print the details
         for (int nodeId = 0; nodeId <= maxNodeId; ++nodeId) {
-            const CGNode& node = callGraph.getNode(nodeId);
+            const CGNode& node = result.callGraph.getNode(nodeId);
             
             if (node.function && node.function != nullptr) {
                 std::string funcName = node.function->getName().str();
@@ -168,11 +169,11 @@ public:
         result.function_contexts = contexts;
         result.raw_output = detailed_output.str();
         
-        // Build the summary output for backward compatibility
+        // Build the summary output
         std::stringstream summary;
-        summary << "PointsToMap: " << result.points_to_nodes << " nodes\n";
-        summary << "CallGraph: " << result.call_graph_nodes << " nodes, " << result.call_graph_edges << " edges\n";
-        summary << "Visited functions: " << result.visited_functions << "\n";
+        summary << "PointsToMap: " << result.pointsToMap.size() << " nodes\n";
+        summary << "CallGraph: " << result.callGraph.numNodes() << " nodes, " << result.callGraph.numEdges() << " edges\n";
+        summary << "Visited functions: " << result.visitedFunctions.size() << "\n";
         
         // Channel semantics info
         std::string channel_info_str;
@@ -189,13 +190,14 @@ public:
     
     // Enhanced assertion methods for specific call graph analysis
     void assert_call_graph_nodes_count(int expected, const std::string& message, const TestResult& result) {
-        if (result.call_graph_nodes == expected) {
-            std::cout << "  ✓ " << message << " (found " << result.call_graph_nodes << " nodes)" << std::endl;
+        int actual = result.callGraph.numNodes();
+        if (actual == expected) {
+            std::cout << "  ✓ " << message << " (found " << actual << " nodes)" << std::endl;
             passed_tests++;
         } else {
             std::cout << "  ✗ " << message << std::endl;
             std::cout << "    Expected: " << expected << " nodes" << std::endl;
-            std::cout << "    Actual: " << result.call_graph_nodes << " nodes" << std::endl;
+            std::cout << "    Actual: " << actual << " nodes" << std::endl;
             failed_tests++;
         }
     }
@@ -251,6 +253,130 @@ public:
     
     void print_detailed_analysis(const TestResult& result) {
         std::cout << "\n" << result.raw_output << std::endl;
+    }
+    
+    // New assertion methods using stored data structures
+    void assert_points_to_map_size(int expected, const std::string& message, const TestResult& result) {
+        int actual = result.pointsToMap.size();
+        if (actual == expected) {
+            std::cout << "  ✓ " << message << " (found " << actual << " pointer nodes)" << std::endl;
+            passed_tests++;
+        } else {
+            std::cout << "  ✗ " << message << std::endl;
+            std::cout << "    Expected: " << expected << " pointer nodes" << std::endl;
+            std::cout << "    Actual: " << actual << " pointer nodes" << std::endl;
+            failed_tests++;
+        }
+    }
+    
+    void assert_call_graph_edges_count(int expected, const std::string& message, const TestResult& result) {
+        int actual = result.callGraph.numEdges();
+        if (actual == expected) {
+            std::cout << "  ✓ " << message << " (found " << actual << " edges)" << std::endl;
+            passed_tests++;
+        } else {
+            std::cout << "  ✗ " << message << std::endl;
+            std::cout << "    Expected: " << expected << " edges" << std::endl;
+            std::cout << "    Actual: " << actual << " edges" << std::endl;
+            failed_tests++;
+        }
+    }
+    
+    void assert_visited_functions_count(int expected, const std::string& message, const TestResult& result) {
+        int actual = result.visitedFunctions.size();
+        if (actual == expected) {
+            std::cout << "  ✓ " << message << " (found " << actual << " visited functions)" << std::endl;
+            passed_tests++;
+        } else {
+            std::cout << "  ✗ " << message << std::endl;
+            std::cout << "    Expected: " << expected << " visited functions" << std::endl;
+            std::cout << "    Actual: " << actual << " visited functions" << std::endl;
+            failed_tests++;
+        }
+    }
+    
+    void assert_function_in_call_graph(const std::string& function_name, const std::string& message, const TestResult& result) {
+        bool found = false;
+        int maxNodeId = -1;
+        const auto& graph = result.callGraph.getGraph();
+        
+        // Find maximum node ID
+        for (const auto& entry : graph) {
+            maxNodeId = std::max(maxNodeId, entry.first);
+            for (int targetId : entry.second) {
+                maxNodeId = std::max(maxNodeId, targetId);
+            }
+        }
+        
+        // Check if function exists in call graph
+        for (int nodeId = 0; nodeId <= maxNodeId; ++nodeId) {
+            const CGNode& node = result.callGraph.getNode(nodeId);
+            if (node.function && node.function->getName().str() == function_name) {
+                found = true;
+                break;
+            }
+        }
+        
+        if (found) {
+            std::cout << "  ✓ " << message << " (function '" << function_name << "' found in call graph)" << std::endl;
+            passed_tests++;
+        } else {
+            std::cout << "  ✗ " << message << std::endl;
+            std::cout << "    Expected function '" << function_name << "' to be in call graph" << std::endl;
+            failed_tests++;
+        }
+    }
+    
+    void assert_points_to_map_size_greater_than(int expected, const std::string& message, const TestResult& result) {
+        int actual = result.pointsToMap.size();
+        if (actual > expected) {
+            std::cout << "  ✓ " << message << " (" << actual << " > " << expected << ")" << std::endl;
+            passed_tests++;
+        } else {
+            std::cout << "  ✗ " << message << " (" << actual << " <= " << expected << ")" << std::endl;
+            failed_tests++;
+        }
+    }
+    
+    void assert_call_graph_edges_count_greater_than(int expected, const std::string& message, const TestResult& result) {
+        int actual = result.callGraph.numEdges();
+        if (actual > expected) {
+            std::cout << "  ✓ " << message << " (" << actual << " > " << expected << ")" << std::endl;
+            passed_tests++;
+        } else {
+            std::cout << "  ✗ " << message << " (" << actual << " <= " << expected << ")" << std::endl;
+            failed_tests++;
+        }
+    }
+    
+    void assert_function_in_visited_set(const std::string& function_name, const std::string& message, const TestResult& result) {
+        bool found = false;
+        for (const Function* func : result.visitedFunctions) {
+            if (func && func->getName().str() == function_name) {
+                found = true;
+                break;
+            }
+        }
+        
+        if (found) {
+            std::cout << "  ✓ " << message << " (function '" << function_name << "' found in visited set)" << std::endl;
+            passed_tests++;
+        } else {
+            std::cout << "  ✗ " << message << std::endl;
+            std::cout << "    Expected function '" << function_name << "' to be visited" << std::endl;
+            failed_tests++;
+        }
+    }
+    
+    void assert_call_graph_nodes_count_greater_than(int expected, const std::string& message, const TestResult& result) {
+        int actual = result.callGraph.numNodes();
+        if (actual > expected) {
+            std::cout << "  ✓ " << message << " (" << actual << " > " << expected << ")" << std::endl;
+            passed_tests++;
+        } else {
+            std::cout << "  ✗ " << message << " (" << actual << " <= " << expected << ")" << std::endl;
+            failed_tests++;
+        }
     }
     
     // Assert helper functions

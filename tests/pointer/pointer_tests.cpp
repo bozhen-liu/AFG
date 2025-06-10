@@ -23,7 +23,7 @@ void run_pointer_tests(AFGTestFramework& framework) {
         
         // Key assertion: Basic analysis should have fewer call graph nodes than k-callsite
         // because it merges contexts, while k-callsite creates separate instances
-        framework.assert_true(kcs_result.call_graph_nodes >= basic_result.call_graph_nodes, 
+        framework.assert_true(kcs_result.callGraph.numNodes() >= basic_result.callGraph.numNodes(), 
                             "K-callsite analysis should have same or more call graph nodes than basic analysis");
         
         // Specific assertions for simple.ll:
@@ -93,9 +93,9 @@ void run_pointer_tests(AFGTestFramework& framework) {
         
         // Higher K values should potentially create more precise context tracking
         // The call graph structure may vary based on K value
-        std::cout << "  K=1 call graph nodes: " << k1_result.call_graph_nodes << std::endl;
-        std::cout << "  K=2 call graph nodes: " << k2_result.call_graph_nodes << std::endl;
-        std::cout << "  K=3 call graph nodes: " << k3_result.call_graph_nodes << std::endl;
+        std::cout << "  K=1 call graph nodes: " << k1_result.callGraph.numNodes() << std::endl;
+        std::cout << "  K=2 call graph nodes: " << k2_result.callGraph.numNodes() << std::endl;
+        std::cout << "  K=3 call graph nodes: " << k3_result.callGraph.numNodes() << std::endl;
     }
     
     // Test 5: Store/Load instruction analysis
@@ -103,7 +103,7 @@ void run_pointer_tests(AFGTestFramework& framework) {
         framework.start_test("Store/Load Instruction Analysis");
         auto result = framework.runPointerAnalysis("pointer/store_load_test.ll", "basic");
         framework.assert_true(result.passed, "Store/load analysis should succeed");
-        framework.assert_true(result.points_to_nodes > 0, "Should create points-to relationships");
+        framework.assert_points_to_map_size_greater_than(0, "Should create points-to relationships", result);
     }
     
     // Test 6: Alloca instruction analysis
@@ -111,7 +111,7 @@ void run_pointer_tests(AFGTestFramework& framework) {
         framework.start_test("Alloca Instruction Analysis");
         auto result = framework.runPointerAnalysis("pointer/alloca_test.ll", "basic");
         framework.assert_true(result.passed, "Alloca analysis should succeed");
-        framework.assert_true(result.points_to_nodes > 0, "Should create nodes for allocated memory");
+        framework.assert_points_to_map_size_greater_than(0, "Should create nodes for allocated memory", result);
     }
     
     // Test 7: Function parameter pointer propagation
@@ -119,7 +119,7 @@ void run_pointer_tests(AFGTestFramework& framework) {
         framework.start_test("Function Parameter Pointer Propagation");
         auto result = framework.runPointerAnalysis("pointer/param_test.ll", "basic");
         framework.assert_true(result.passed, "Parameter propagation analysis should succeed");
-        framework.assert_true(result.call_graph_edges > 0, "Should create call graph edges for function calls");
+        framework.assert_call_graph_edges_count_greater_than(0, "Should create call graph edges for function calls", result);
     }
     
     // Test 8: Multiple pointers to same location
@@ -127,7 +127,7 @@ void run_pointer_tests(AFGTestFramework& framework) {
         framework.start_test("Multiple Pointers Analysis");
         auto result = framework.runPointerAnalysis("pointer/multi_ptr_test.ll", "basic");
         framework.assert_true(result.passed, "Multiple pointers analysis should succeed");
-        framework.assert_true(result.points_to_nodes > 0, "Should handle multiple pointer relationships");
+        framework.assert_points_to_map_size_greater_than(0, "Should handle multiple pointer relationships", result);
     }
     
     // Test 9: Vtable processing
@@ -135,7 +135,7 @@ void run_pointer_tests(AFGTestFramework& framework) {
         framework.start_test("Vtable Processing");
         auto result = framework.runPointerAnalysis("pointer/vtable_test.ll", "basic");
         framework.assert_true(result.passed, "Vtable processing should succeed");
-        framework.assert_true(result.points_to_nodes > 0, "Should process vtable function pointers");
+        framework.assert_points_to_map_size_greater_than(0, "Should process vtable function pointers", result);
     }
     
     // Test 10: Context-sensitive comparison on complex cases
@@ -149,9 +149,9 @@ void run_pointer_tests(AFGTestFramework& framework) {
         framework.assert_true(basic_param.passed && kcs_param.passed, "Both analyses should complete");
         
         // Compare the precision: k-callsite might create more precise analysis
-        std::cout << "  Basic analysis - Call graph nodes: " << basic_param.call_graph_nodes 
-                  << ", Points-to nodes: " << basic_param.points_to_nodes << std::endl;
-        std::cout << "  K-callsite analysis - Call graph nodes: " << kcs_param.call_graph_nodes 
-                  << ", Points-to nodes: " << kcs_param.points_to_nodes << std::endl;
+        std::cout << "  Basic analysis - Call graph nodes: " << basic_param.callGraph.numNodes() 
+                  << ", Points-to nodes: " << basic_param.pointsToMap.size() << std::endl;
+        std::cout << "  K-callsite analysis - Call graph nodes: " << kcs_param.callGraph.numNodes() 
+                  << ", Points-to nodes: " << kcs_param.pointsToMap.size() << std::endl;
     }
 } 

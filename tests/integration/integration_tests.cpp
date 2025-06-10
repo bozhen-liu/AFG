@@ -29,24 +29,24 @@ void run_integration_tests(AFGTestFramework& framework) {
         framework.assert_function_instance_count("callee", 2, "K-callsite analysis should differentiate callee contexts", kcs_result);
         
         // Origin: context-sensitive but on different file (taint analysis specific)
-        framework.assert_true(origin_result.call_graph_nodes > 0, "Origin analysis should produce valid results");
+        framework.assert_call_graph_nodes_count_greater_than(0, "Origin analysis should produce valid results", origin_result);
         
         // Compare basic vs k-callsite (same file)
-        framework.assert_true(basic_result.visited_functions == kcs_result.visited_functions, 
-                            "Basic and K-callsite should visit the same functions");
+        framework.assert_visited_functions_count(basic_result.visitedFunctions.size(), 
+                                                "K-callsite should visit same number of functions as basic", kcs_result);
         
         // Context-sensitive analysis should be at least as precise as basic
-        framework.assert_true(kcs_result.call_graph_nodes >= basic_result.call_graph_nodes, 
+        framework.assert_true(kcs_result.callGraph.numNodes() >= basic_result.callGraph.numNodes(), 
                             "K-callsite should be at least as precise as basic");
         
         // Print comprehensive comparison
         std::cout << "  End-to-End Analysis Comparison:" << std::endl;
-        std::cout << "    Basic (simple.ll): " << basic_result.call_graph_nodes << " CG nodes, " 
-                  << basic_result.points_to_nodes << " points-to nodes" << std::endl;
-        std::cout << "    K-callsite (simple.ll): " << kcs_result.call_graph_nodes << " CG nodes, " 
-                  << kcs_result.points_to_nodes << " points-to nodes" << std::endl;
-        std::cout << "    Origin (taint_test.ll): " << origin_result.call_graph_nodes << " CG nodes, " 
-                  << origin_result.points_to_nodes << " points-to nodes" << std::endl;
+        std::cout << "    Basic (simple.ll): " << basic_result.callGraph.numNodes() << " CG nodes, " 
+                  << basic_result.pointsToMap.size() << " points-to nodes" << std::endl;
+        std::cout << "    K-callsite (simple.ll): " << kcs_result.callGraph.numNodes() << " CG nodes, " 
+                  << kcs_result.pointsToMap.size() << " points-to nodes" << std::endl;
+        std::cout << "    Origin (taint_test.ll): " << origin_result.callGraph.numNodes() << " CG nodes, " 
+                  << origin_result.pointsToMap.size() << " points-to nodes" << std::endl;
     }
     
     // Test 2: Complex multi-threaded scenario
@@ -132,15 +132,15 @@ void run_integration_tests(AFGTestFramework& framework) {
         framework.assert_true(kcs2_result.passed, "K-callsite (K=2) analysis should succeed");
         
         // All should visit the same functions (consistency check)
-        framework.assert_true(basic_result.visited_functions == kcs1_result.visited_functions, 
-                            "Basic and K=1 should visit the same functions");
-        framework.assert_true(basic_result.visited_functions == kcs2_result.visited_functions, 
-                            "Basic and K=2 should visit the same functions");
+        framework.assert_visited_functions_count(basic_result.visitedFunctions.size(), 
+                                                "K=1 should visit same number of functions as basic", kcs1_result);
+        framework.assert_visited_functions_count(basic_result.visitedFunctions.size(), 
+                                                "K=2 should visit same number of functions as basic", kcs2_result);
         
         // Correctness validation: context-sensitive analyses should maintain or increase precision
-        framework.assert_true(kcs1_result.call_graph_nodes >= basic_result.call_graph_nodes, 
+        framework.assert_true(kcs1_result.callGraph.numNodes() >= basic_result.callGraph.numNodes(), 
                             "K=1 should be at least as precise as basic");
-        framework.assert_true(kcs2_result.call_graph_nodes >= kcs1_result.call_graph_nodes, 
+        framework.assert_true(kcs2_result.callGraph.numNodes() >= kcs1_result.callGraph.numNodes(), 
                             "K=2 should be at least as precise as K=1");
         
         // Validate specific function instance counts for consistency
@@ -162,11 +162,11 @@ void run_integration_tests(AFGTestFramework& framework) {
         
         // Print detailed consistency analysis
         std::cout << "  Cross-Analysis Consistency Check:" << std::endl;
-        std::cout << "    Basic: " << basic_result.call_graph_nodes << " CG nodes, " 
+        std::cout << "    Basic: " << basic_result.callGraph.numNodes() << " CG nodes, " 
                   << basic_count << " callee instances" << std::endl;
-        std::cout << "    K=1: " << kcs1_result.call_graph_nodes << " CG nodes, " 
+        std::cout << "    K=1: " << kcs1_result.callGraph.numNodes() << " CG nodes, " 
                   << kcs1_count << " callee instances" << std::endl;
-        std::cout << "    K=2: " << kcs2_result.call_graph_nodes << " CG nodes, " 
+        std::cout << "    K=2: " << kcs2_result.callGraph.numNodes() << " CG nodes, " 
                   << kcs2_count << " callee instances" << std::endl;
     }
 } 
