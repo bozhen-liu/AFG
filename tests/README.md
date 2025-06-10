@@ -159,7 +159,7 @@ framework.print_detailed_analysis(result);
 The framework now provides comprehensive analysis details:
 
 ```cpp
-struct DetailedTestResult {
+struct TestResult {
     bool passed;
     size_t points_to_nodes;                              // Points-to graph size
     size_t call_graph_nodes;                             // Call graph precision
@@ -197,8 +197,8 @@ framework.assert_contains(result.actual, "Channels:", "Should detect channel ins
 framework.start_test("Basic vs K-Callsite Correctness Comparison");
 
 // Run both analysis modes on the same input
-auto basic_result = framework.runDetailedPointerAnalysis("pointer/simple.ll", "basic");
-auto kcs_result = framework.runDetailedPointerAnalysis("pointer/simple.ll", "kcs", 2);
+auto basic_result = framework.runPointerAnalysis("pointer/simple.ll", "basic");
+auto kcs_result = framework.runPointerAnalysis("pointer/simple.ll", "kcs", 2);
 
 // Validate correctness differences
 framework.assert_function_instance_count("callee", 1, "Basic analysis should merge all callee instances", basic_result);
@@ -218,8 +218,8 @@ framework.print_detailed_analysis(kcs_result);
 ```cpp
 framework.start_test("Cross-Analysis Consistency Validation");
 
-auto basic_result = framework.runDetailedPointerAnalysis("test.ll", "basic");
-auto kcs_result = framework.runDetailedPointerAnalysis("test.ll", "kcs", 2);
+auto basic_result = framework.runPointerAnalysis("test.ll", "basic");
+auto kcs_result = framework.runPointerAnalysis("test.ll", "kcs", 2);
 
 // Validate consistency
 framework.assert_true(basic_result.visited_functions == kcs_result.visited_functions,

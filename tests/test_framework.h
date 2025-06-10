@@ -29,8 +29,8 @@ private:
     std::string current_category;
     
 public:
-    // Enhanced test result structure with detailed call graph info
-    struct DetailedTestResult {
+    // Test result structure with detailed call graph info
+    struct TestResult {
         bool passed;
         std::string message;
         std::string expected;
@@ -44,14 +44,6 @@ public:
         std::map<std::string, int> function_instance_counts;  // Function name -> number of instances
         std::vector<std::string> function_contexts;           // All function contexts found
         std::string raw_output;                               // Complete analysis output for debugging
-    };
-    
-    // Test result structure (backward compatibility)
-    struct TestResult {
-        bool passed;
-        std::string message;
-        std::string expected;
-        std::string actual;
     };
     
     // Load LLVM IR module from file
@@ -70,7 +62,7 @@ public:
     }
     
     // Enhanced pointer analysis with detailed call graph extraction
-    DetailedTestResult runDetailedPointerAnalysis(const std::string& ir_file, const std::string& analysis_mode = "basic", unsigned k_value = 1) {
+    TestResult runPointerAnalysis(const std::string& ir_file, const std::string& analysis_mode = "basic", unsigned k_value = 1) {
         auto module = loadModule(ir_file);
         if (!module) {
             return {false, "Failed to load IR module", "", "", 0, 0, 0, 0, {}, {}, ""};
@@ -92,7 +84,7 @@ public:
         const auto& pointsToMap = PA->getPointsToMap();
         const auto& callGraph = PA->getCallGraph();
         
-        DetailedTestResult result;
+        TestResult result;
         result.passed = true;
         result.message = "Analysis completed successfully";
         result.points_to_nodes = pointsToMap.size();
@@ -194,14 +186,9 @@ public:
         return result;
     }
     
-    // Backward-compatible wrapper
-    TestResult runPointerAnalysis(const std::string& ir_file, const std::string& analysis_mode = "basic", unsigned k_value = 1) {
-        auto detailed = runDetailedPointerAnalysis(ir_file, analysis_mode, k_value);
-        return {detailed.passed, detailed.message, detailed.expected, detailed.actual};
-    }
     
     // Enhanced assertion methods for specific call graph analysis
-    void assert_call_graph_nodes_count(int expected, const std::string& message, const DetailedTestResult& result) {
+    void assert_call_graph_nodes_count(int expected, const std::string& message, const TestResult& result) {
         if (result.call_graph_nodes == expected) {
             std::cout << "  ✓ " << message << " (found " << result.call_graph_nodes << " nodes)" << std::endl;
             passed_tests++;
@@ -213,7 +200,7 @@ public:
         }
     }
     
-    void assert_function_instance_count(const std::string& function_name, int expected_count, const std::string& message, const DetailedTestResult& result) {
+    void assert_function_instance_count(const std::string& function_name, int expected_count, const std::string& message, const TestResult& result) {
         auto it = result.function_instance_counts.find(function_name);
         int actual_count = (it != result.function_instance_counts.end()) ? it->second : 0;
         
@@ -228,7 +215,7 @@ public:
         }
     }
     
-    void assert_context_differentiation(const std::string& function_name, const std::vector<std::string>& expected_context_parts, const std::string& message, const DetailedTestResult& result) {
+    void assert_context_differentiation(const std::string& function_name, const std::vector<std::string>& expected_context_parts, const std::string& message, const TestResult& result) {
         int contexts_found = 0;
         std::vector<std::string> found_contexts;
         
@@ -262,7 +249,7 @@ public:
         }
     }
     
-    void print_detailed_analysis(const DetailedTestResult& result) {
+    void print_detailed_analysis(const TestResult& result) {
         std::cout << "\n" << result.raw_output << std::endl;
     }
     

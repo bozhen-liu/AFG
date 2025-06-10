@@ -9,8 +9,8 @@ void run_taint_tests(AFGTestFramework& framework) {
     // Test 1: Taint configuration loading with detailed validation
     {
         framework.start_test("Taint Configuration Loading Correctness");
-        auto basic_result = framework.runDetailedPointerAnalysis("taint/taint_test.ll", "basic");
-        auto origin_result = framework.runDetailedPointerAnalysis("taint/taint_test.ll", "origin", 2);
+        auto basic_result = framework.runPointerAnalysis("taint/taint_test.ll", "basic");
+        auto origin_result = framework.runPointerAnalysis("taint/taint_test.ll", "origin", 2);
         
         framework.assert_true(basic_result.passed, "Basic analysis on taint test should succeed");
         framework.assert_true(origin_result.passed, "Origin taint analysis should succeed");
@@ -34,9 +34,9 @@ void run_taint_tests(AFGTestFramework& framework) {
     // Test 2: Origin context tracking with different K values
     {
         framework.start_test("Origin Context Tracking Precision");
-        auto origin_k1 = framework.runDetailedPointerAnalysis("taint/origin_test.ll", "origin", 1);
-        auto origin_k2 = framework.runDetailedPointerAnalysis("taint/origin_test.ll", "origin", 2);
-        auto origin_k3 = framework.runDetailedPointerAnalysis("taint/origin_test.ll", "origin", 3);
+        auto origin_k1 = framework.runPointerAnalysis("taint/origin_test.ll", "origin", 1);
+        auto origin_k2 = framework.runPointerAnalysis("taint/origin_test.ll", "origin", 2);
+        auto origin_k3 = framework.runPointerAnalysis("taint/origin_test.ll", "origin", 3);
         
         framework.assert_true(origin_k1.passed, "Origin analysis K=1 should succeed");
         framework.assert_true(origin_k2.passed, "Origin analysis K=2 should succeed");
@@ -57,8 +57,8 @@ void run_taint_tests(AFGTestFramework& framework) {
     // Test 3: Taint propagation through pointers with correctness validation
     {
         framework.start_test("Taint Propagation Correctness Validation");
-        auto basic_result = framework.runDetailedPointerAnalysis("taint/propagation_test.ll", "basic");
-        auto origin_result = framework.runDetailedPointerAnalysis("taint/propagation_test.ll", "origin", 2);
+        auto basic_result = framework.runPointerAnalysis("taint/propagation_test.ll", "basic");
+        auto origin_result = framework.runPointerAnalysis("taint/propagation_test.ll", "origin", 2);
         
         framework.assert_true(basic_result.passed, "Basic propagation analysis should succeed");
         framework.assert_true(origin_result.passed, "Origin propagation analysis should succeed");
@@ -79,9 +79,9 @@ void run_taint_tests(AFGTestFramework& framework) {
     // Test 4: Multiple tainted objects with cross-analysis comparison
     {
         framework.start_test("Multiple Tainted Objects Analysis Comparison");
-        auto basic_result = framework.runDetailedPointerAnalysis("taint/multi_taint_test.ll", "basic");
-        auto kcs_result = framework.runDetailedPointerAnalysis("taint/multi_taint_test.ll", "kcs", 2);
-        auto origin_result = framework.runDetailedPointerAnalysis("taint/multi_taint_test.ll", "origin", 2);
+        auto basic_result = framework.runPointerAnalysis("taint/multi_taint_test.ll", "basic");
+        auto kcs_result = framework.runPointerAnalysis("taint/multi_taint_test.ll", "kcs", 2);
+        auto origin_result = framework.runPointerAnalysis("taint/multi_taint_test.ll", "origin", 2);
         
         framework.assert_true(basic_result.passed, "Basic multi-taint analysis should succeed");
         framework.assert_true(kcs_result.passed, "K-callsite multi-taint analysis should succeed");
@@ -107,8 +107,8 @@ void run_taint_tests(AFGTestFramework& framework) {
     // Test 5: Taint through function parameters with context sensitivity
     {
         framework.start_test("Taint Through Function Parameters Context Sensitivity");
-        auto basic_result = framework.runDetailedPointerAnalysis("taint/param_taint_test.ll", "basic");
-        auto origin_result = framework.runDetailedPointerAnalysis("taint/param_taint_test.ll", "origin", 2);
+        auto basic_result = framework.runPointerAnalysis("taint/param_taint_test.ll", "basic");
+        auto origin_result = framework.runPointerAnalysis("taint/param_taint_test.ll", "origin", 2);
         
         framework.assert_true(basic_result.passed, "Basic parameter taint analysis should succeed");
         framework.assert_true(origin_result.passed, "Origin parameter taint analysis should succeed");
@@ -136,9 +136,9 @@ void run_taint_tests(AFGTestFramework& framework) {
     // Test 6: Context-sensitive taint analysis with detailed validation
     {
         framework.start_test("Context-Sensitive Taint Analysis Validation");
-        auto origin_k1 = framework.runDetailedPointerAnalysis("taint/context_taint_test.ll", "origin", 1);
-        auto origin_k2 = framework.runDetailedPointerAnalysis("taint/context_taint_test.ll", "origin", 2);
-        auto origin_k4 = framework.runDetailedPointerAnalysis("taint/context_taint_test.ll", "origin", 4);
+        auto origin_k1 = framework.runPointerAnalysis("taint/context_taint_test.ll", "origin", 1);
+        auto origin_k2 = framework.runPointerAnalysis("taint/context_taint_test.ll", "origin", 2);
+        auto origin_k4 = framework.runPointerAnalysis("taint/context_taint_test.ll", "origin", 4);
         
         framework.assert_true(origin_k1.passed, "Origin K=1 context taint analysis should succeed");
         framework.assert_true(origin_k2.passed, "Origin K=2 context taint analysis should succeed");

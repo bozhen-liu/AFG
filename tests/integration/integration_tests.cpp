@@ -12,10 +12,10 @@ void run_integration_tests(AFGTestFramework& framework) {
         framework.start_test("End-to-End Analysis Correctness Comparison");
         
         // Use the existing simple.ll for detailed comparison
-        auto basic_result = framework.runDetailedPointerAnalysis("pointer/simple.ll", "basic");
-        auto kcs_result = framework.runDetailedPointerAnalysis("pointer/simple.ll", "kcs", 2);
+        auto basic_result = framework.runPointerAnalysis("pointer/simple.ll", "basic");
+        auto kcs_result = framework.runPointerAnalysis("pointer/simple.ll", "kcs", 2);
         // Run Origin analysis on a file actually designed for taint analysis
-        auto origin_result = framework.runDetailedPointerAnalysis("taint/taint_test.ll", "origin", 2);
+        auto origin_result = framework.runPointerAnalysis("taint/taint_test.ll", "origin", 2);
         
         framework.assert_true(basic_result.passed, "Basic analysis should succeed");
         framework.assert_true(kcs_result.passed, "K-callsite analysis should succeed");
@@ -123,9 +123,9 @@ void run_integration_tests(AFGTestFramework& framework) {
         framework.start_test("Cross-Analysis Consistency and Correctness");
         
         // Run the same test with different analysis modes and compare correctness
-        auto basic_result = framework.runDetailedPointerAnalysis("pointer/simple.ll", "basic");
-        auto kcs1_result = framework.runDetailedPointerAnalysis("pointer/simple.ll", "kcs", 1);
-        auto kcs2_result = framework.runDetailedPointerAnalysis("pointer/simple.ll", "kcs", 2);
+        auto basic_result = framework.runPointerAnalysis("pointer/simple.ll", "basic");
+        auto kcs1_result = framework.runPointerAnalysis("pointer/simple.ll", "kcs", 1);
+        auto kcs2_result = framework.runPointerAnalysis("pointer/simple.ll", "kcs", 2);
         
         framework.assert_true(basic_result.passed, "Basic analysis should succeed");
         framework.assert_true(kcs1_result.passed, "K-callsite (K=1) analysis should succeed");

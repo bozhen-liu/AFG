@@ -6,8 +6,8 @@ void run_channel_tests(AFGTestFramework& framework) {
     // Test 1: Channel creation detection with detailed validation
     {
         framework.start_test("Channel Creation Detection Correctness");
-        auto basic_result = framework.runDetailedPointerAnalysis("channel/channel_create_test.ll", "basic");
-        auto kcs_result = framework.runDetailedPointerAnalysis("channel/channel_create_test.ll", "kcs", 2);
+        auto basic_result = framework.runPointerAnalysis("channel/channel_create_test.ll", "basic");
+        auto kcs_result = framework.runPointerAnalysis("channel/channel_create_test.ll", "kcs", 2);
         
         framework.assert_true(basic_result.passed, "Basic channel creation analysis should succeed");
         framework.assert_true(kcs_result.passed, "K-callsite channel creation analysis should succeed");
@@ -28,8 +28,8 @@ void run_channel_tests(AFGTestFramework& framework) {
     // Test 2: Send operation detection with context sensitivity
     {
         framework.start_test("Channel Send Operation Context Sensitivity");
-        auto basic_result = framework.runDetailedPointerAnalysis("channel/send_test.ll", "basic");
-        auto kcs_result = framework.runDetailedPointerAnalysis("channel/send_test.ll", "kcs", 2);
+        auto basic_result = framework.runPointerAnalysis("channel/send_test.ll", "basic");
+        auto kcs_result = framework.runPointerAnalysis("channel/send_test.ll", "kcs", 2);
         
         framework.assert_true(basic_result.passed, "Basic send operation analysis should succeed");
         framework.assert_true(kcs_result.passed, "K-callsite send operation analysis should succeed");
@@ -47,8 +47,8 @@ void run_channel_tests(AFGTestFramework& framework) {
     // Test 3: Receive operation detection with precision comparison
     {
         framework.start_test("Channel Receive Operation Precision Comparison");
-        auto basic_result = framework.runDetailedPointerAnalysis("channel/recv_test.ll", "basic");
-        auto kcs_result = framework.runDetailedPointerAnalysis("channel/recv_test.ll", "kcs", 2);
+        auto basic_result = framework.runPointerAnalysis("channel/recv_test.ll", "basic");
+        auto kcs_result = framework.runPointerAnalysis("channel/recv_test.ll", "kcs", 2);
         
         framework.assert_true(basic_result.passed, "Basic receive operation analysis should succeed");
         framework.assert_true(kcs_result.passed, "K-callsite receive operation analysis should succeed");
@@ -62,8 +62,8 @@ void run_channel_tests(AFGTestFramework& framework) {
     // Test 4: Complete channel communication flow with detailed metrics
     {
         framework.start_test("Complete Channel Communication Flow Analysis");
-        auto basic_result = framework.runDetailedPointerAnalysis("channel/flow_test.ll", "basic");
-        auto kcs_result = framework.runDetailedPointerAnalysis("channel/flow_test.ll", "kcs", 2);
+        auto basic_result = framework.runPointerAnalysis("channel/flow_test.ll", "basic");
+        auto kcs_result = framework.runPointerAnalysis("channel/flow_test.ll", "kcs", 2);
         
         framework.assert_true(basic_result.passed, "Basic channel flow analysis should succeed");
         framework.assert_true(kcs_result.passed, "K-callsite channel flow analysis should succeed");
@@ -85,7 +85,7 @@ void run_channel_tests(AFGTestFramework& framework) {
     // Test 5: Channel data flow constraints correctness
     {
         framework.start_test("Channel Data Flow Constraints Correctness");
-        auto result = framework.runDetailedPointerAnalysis("channel/dataflow_test.ll", "basic");
+        auto result = framework.runPointerAnalysis("channel/dataflow_test.ll", "basic");
         framework.assert_true(result.passed, "Channel dataflow analysis should succeed");
         
         // Validate that data flow creates proper constraints
@@ -99,8 +99,8 @@ void run_channel_tests(AFGTestFramework& framework) {
     // Test 6: Tokio channel operations with context differentiation
     {
         framework.start_test("Tokio Channel Context Differentiation");
-        auto basic_result = framework.runDetailedPointerAnalysis("channel/tokio_test.ll", "basic");
-        auto kcs_result = framework.runDetailedPointerAnalysis("channel/tokio_test.ll", "kcs", 2);
+        auto basic_result = framework.runPointerAnalysis("channel/tokio_test.ll", "basic");
+        auto kcs_result = framework.runPointerAnalysis("channel/tokio_test.ll", "kcs", 2);
         
         framework.assert_true(basic_result.passed, "Basic Tokio analysis should succeed");
         framework.assert_true(kcs_result.passed, "K-callsite Tokio analysis should succeed");
@@ -117,7 +117,7 @@ void run_channel_tests(AFGTestFramework& framework) {
     // Test 7: Real Rust mangled names correctness validation
     {
         framework.start_test("Real Rust Mangled Names Correctness");
-        auto result = framework.runDetailedPointerAnalysis("channel/mangled_test.ll", "basic");
+        auto result = framework.runPointerAnalysis("channel/mangled_test.ll", "basic");
         framework.assert_true(result.passed, "Real mangled names analysis should succeed");
         
         // Should properly process real Rust channel function names
@@ -139,8 +139,8 @@ void run_channel_tests(AFGTestFramework& framework) {
     // Test 8: Channel constraints integration with cross-analysis validation
     {
         framework.start_test("Channel Constraints Integration Validation");
-        auto basic_result = framework.runDetailedPointerAnalysis("channel/constraints_test.ll", "basic");
-        auto kcs_result = framework.runDetailedPointerAnalysis("channel/constraints_test.ll", "kcs", 2);
+        auto basic_result = framework.runPointerAnalysis("channel/constraints_test.ll", "basic");
+        auto kcs_result = framework.runPointerAnalysis("channel/constraints_test.ll", "kcs", 2);
         
         framework.assert_true(basic_result.passed, "Basic constraints integration should succeed");
         framework.assert_true(kcs_result.passed, "K-callsite constraints integration should succeed");

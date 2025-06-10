@@ -8,15 +8,15 @@ void run_context_tests(AFGTestFramework& framework) {
         framework.start_test("Basic vs K-Callsite Context Differentiation");
         
         // Run basic analysis (context-insensitive)
-        auto basic_result = framework.runDetailedPointerAnalysis("pointer/simple.ll", "basic");
+        auto basic_result = framework.runPointerAnalysis("pointer/simple.ll", "basic");
         framework.assert_true(basic_result.passed, "Basic analysis should complete successfully");
         
         // Run k-callsite analysis with K=1 (limited context)
-        auto k1_result = framework.runDetailedPointerAnalysis("pointer/simple.ll", "kcs", 1);
+        auto k1_result = framework.runPointerAnalysis("pointer/simple.ll", "kcs", 1);
         framework.assert_true(k1_result.passed, "K=1 analysis should complete successfully");
         
         // Run k-callsite analysis with K=2 (more context)
-        auto k2_result = framework.runDetailedPointerAnalysis("pointer/simple.ll", "kcs", 2);
+        auto k2_result = framework.runPointerAnalysis("pointer/simple.ll", "kcs", 2);
         framework.assert_true(k2_result.passed, "K=2 analysis should complete successfully");
         
         // Validate context sensitivity progression
@@ -49,9 +49,9 @@ void run_context_tests(AFGTestFramework& framework) {
         framework.start_test("Context Propagation Through Call Chains");
         
         // Test with depth_test.ll which has a deeper call chain
-        auto basic_result = framework.runDetailedPointerAnalysis("context/depth_test.ll", "basic");
-        auto k2_result = framework.runDetailedPointerAnalysis("context/depth_test.ll", "kcs", 2);
-        auto k3_result = framework.runDetailedPointerAnalysis("context/depth_test.ll", "kcs", 3);
+        auto basic_result = framework.runPointerAnalysis("context/depth_test.ll", "basic");
+        auto k2_result = framework.runPointerAnalysis("context/depth_test.ll", "kcs", 2);
+        auto k3_result = framework.runPointerAnalysis("context/depth_test.ll", "kcs", 3);
         
         framework.assert_true(basic_result.passed && k2_result.passed && k3_result.passed, 
                             "All context propagation analyses should succeed");
@@ -72,8 +72,8 @@ void run_context_tests(AFGTestFramework& framework) {
     {
         framework.start_test("Recursive Function Context Correctness");
         
-        auto basic_result = framework.runDetailedPointerAnalysis("context/recursive_test.ll", "basic");
-        auto kcs_result = framework.runDetailedPointerAnalysis("context/recursive_test.ll", "kcs", 2);
+        auto basic_result = framework.runPointerAnalysis("context/recursive_test.ll", "basic");
+        auto kcs_result = framework.runPointerAnalysis("context/recursive_test.ll", "kcs", 2);
         
         framework.assert_true(basic_result.passed, "Basic recursive analysis should succeed");
         framework.assert_true(kcs_result.passed, "K-callsite recursive analysis should succeed");
@@ -92,8 +92,8 @@ void run_context_tests(AFGTestFramework& framework) {
     {
         framework.start_test("Function Pointer Context Differentiation");
         
-        auto basic_result = framework.runDetailedPointerAnalysis("context/func_ptr_test.ll", "basic");
-        auto kcs_result = framework.runDetailedPointerAnalysis("context/func_ptr_test.ll", "kcs", 2);
+        auto basic_result = framework.runPointerAnalysis("context/func_ptr_test.ll", "basic");
+        auto kcs_result = framework.runPointerAnalysis("context/func_ptr_test.ll", "kcs", 2);
         
         framework.assert_true(basic_result.passed, "Basic function pointer analysis should succeed");
         framework.assert_true(kcs_result.passed, "K-callsite function pointer analysis should succeed");
@@ -112,9 +112,9 @@ void run_context_tests(AFGTestFramework& framework) {
         framework.start_test("Context Size Impact on Precision");
         
         // Test the same complex scenario with different K values
-        auto k1_result = framework.runDetailedPointerAnalysis("context/context_test.ll", "kcs", 1);
-        auto k2_result = framework.runDetailedPointerAnalysis("context/context_test.ll", "kcs", 2);
-        auto k4_result = framework.runDetailedPointerAnalysis("context/context_test.ll", "kcs", 4);
+        auto k1_result = framework.runPointerAnalysis("context/context_test.ll", "kcs", 1);
+        auto k2_result = framework.runPointerAnalysis("context/context_test.ll", "kcs", 2);
+        auto k4_result = framework.runPointerAnalysis("context/context_test.ll", "kcs", 4);
         
         framework.assert_true(k1_result.passed && k2_result.passed && k4_result.passed, 
                             "All K-value analyses should succeed");
@@ -136,7 +136,7 @@ void run_context_tests(AFGTestFramework& framework) {
     {
         framework.start_test("Context String Format and Content Validation");
         
-        auto kcs_result = framework.runDetailedPointerAnalysis("pointer/simple.ll", "kcs", 2);
+        auto kcs_result = framework.runPointerAnalysis("pointer/simple.ll", "kcs", 2);
         framework.assert_true(kcs_result.passed, "K-callsite analysis should succeed");
         
         // Print detailed analysis to show context formats
