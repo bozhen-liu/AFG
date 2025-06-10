@@ -12,6 +12,7 @@
 #include <utility>
 #include <deque>
 #include "CallGraph.h"
+#include "ChannelSemantics.h"
 
 namespace llvm
 {
@@ -80,7 +81,8 @@ namespace llvm
     {
         Assign,
         Load,
-        Store
+        Store,
+        Channel // used when considering channel ops
     };
 
     struct PtrConstraint
@@ -119,7 +121,16 @@ namespace llvm
             callGraph.clear();
         }
 
-        virtual Context getContext(Context context, const Value *newCallSite = nullptr);
+        // Channel semantics integration
+        ChannelSemantics channelSemantics;
+        
+        // Make Worklist accessible for channel constraints
+        std::vector<PtrConstraint> Worklist; // Worklist for new constraints to visit
+
+        // Make getOrCreateNode public for channel semantics
+        Node *getOrCreateNode(llvm::Value *value, Context context = Everywhere); // create or find node: ctx == Everywhere
+
+        virtual Context getContext(Context context = Everywhere, const Value *newCallSite = nullptr);
         virtual void processInstruction(Instruction &I, CGNode *cgnode);
 
         // Visitor methods
@@ -149,7 +160,6 @@ namespace llvm
 
         std::unordered_map<std::pair<llvm::Value *, Context>, Node *> ValueContextToNodeMap; // Map to track Value and context pairs to Node
 
-        Node *getOrCreateNode(llvm::Value *value, Context context = Everywhere); // create or find node: ctx == Everywhere
         void AddToFunctionWorklist(CGNode *callee);
         void processVtable(GlobalVariable &GV);
         virtual void processGlobalVar(GlobalVariable &GV);
@@ -160,8 +170,8 @@ namespace llvm
         CGNode *CurrentCGNode = nullptr;
         Context CurrentContext;
 
-        std::vector<PtrConstraint> Worklist; // Worklist for new constraints to visit
         void solveConstraints();
+        void processConstraintsUntilFixedPoint();
 
         std::string inputDir;           // Directory containing the JSON file
         std::string outputFile;         // Output file name
@@ -170,6 +180,10 @@ namespace llvm
 
         llvm::Function *parseMainFn(Module &M); // Parse the main function from the module
         void onthefly(Module &M);               // On-the-fly analysis
+        
+        // Channel-specific analysis methods
+        void handleChannelOperation(CallInst &CI);
+        bool handleChannelConstraints();
     };
 
 } // namespace llvm
