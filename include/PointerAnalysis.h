@@ -55,10 +55,11 @@ namespace llvm
 
     struct Node
     {
-        int id;                        // Unique node ID
-        llvm::Value *value;            // The LLVM value
-        Context context;               // The context
-        std::vector<uint64_t> indices; // For field-sensitive analysis, stores the indices of the fields
+        uint64_t id;                      // Unique node ID
+        llvm::Value *value;               // The LLVM value
+        Context context;                  // The context
+        std::vector<uint64_t> indices;    // For field-sensitive analysis, stores the indices of the fields
+        std::unordered_set<uint64_t> pts; // Points-to set
 
         // Constructor
         Node(int nodeId, llvm::Value *v, Context ctx = Everywhere, std::vector<uint64_t> idx = {}) : id(nodeId), value(v), context(ctx), indices(std::move(idx)) {}
@@ -135,11 +136,14 @@ namespace llvm
         Channel // used when considering channel ops
     };
 
-    struct PtrConstraint
+    struct PtrConstraint // use UINT64_MAX for null
     {
         ConstraintType type;
-        Node *src; // Source value
-        Node *dst; // Destination value
+        uint64_t src_id; // Source Node ID
+        uint64_t dst_id; // Destination Node ID
+
+        PtrConstraint(ConstraintType t, uint64_t s, uint64_t d)
+            : type(t), src_id(s), dst_id(d) {}
     };
 
     class PointerAnalysis : public InstVisitor<PointerAnalysis>
@@ -148,10 +152,7 @@ namespace llvm
         // Debug flag to enable or disable debugging output
         bool DebugMode = false;
 
-        using PointsToMapTy = std::unordered_map<Node *, std::unordered_set<Node *>>;
-
         virtual void analyze(Module &M);
-        const PointsToMapTy &getPointsToMap() const { return pointsToMap; }
         const CallGraph &getCallGraph() const { return callGraph; }
         const std::unordered_set<Function *> &getVisitedFunctions() const
         {
@@ -164,7 +165,7 @@ namespace llvm
 
         void clear()
         {
-            pointsToMap.clear();
+            idToNodeMap.clear();
             Visited.clear();
             Worklist.clear();
             FunctionWorklist.clear();
@@ -197,29 +198,49 @@ namespace llvm
                     break;
                 }
                 errs() << "\t Added constraint: " << typeStr
-                       << " src=" << (last.src ? last.src->id : -1);
-                if (last.src && last.src->indices.size() > 0)
+                       << " src=";
+                if (last.src_id != UINT64_MAX)
                 {
-                    errs() << " (indices=[";
-                    for (size_t i = 0; i < last.src->indices.size(); ++i)
+                    errs() << last.src_id;
+                    auto it = idToNodeMap.find(last.src_id);
+                    auto src = it->second;
+                    if (it != idToNodeMap.end() && src && !src->indices.empty())
                     {
-                        errs() << last.src->indices[i];
-                        if (i + 1 < last.src->indices.size())
-                            errs() << ",";
+                        errs() << " (indices=[";
+                        for (size_t i = 0; i < src->indices.size(); ++i)
+                        {
+                            errs() << src->indices[i];
+                            if (i + 1 < src->indices.size())
+                                errs() << ",";
+                        }
+                        errs() << "])";
                     }
-                    errs() << "])";
                 }
-                errs() << " dst=" << (last.dst ? last.dst->id : -1);
-                if (last.dst && last.dst->indices.size() > 0)
+                else
                 {
-                    errs() << " (indices=[";
-                    for (size_t i = 0; i < last.dst->indices.size(); ++i)
+                    errs() << "null";
+                }
+                errs() << " dst=";
+                if (last.dst_id != UINT64_MAX)
+                {
+                    errs() << last.src_id;
+                    auto it = idToNodeMap.find(last.dst_id);
+                    auto dst = it->second;
+                    if (it != idToNodeMap.end() && dst && !dst->indices.empty())
                     {
-                        errs() << last.dst->indices[i];
-                        if (i + 1 < last.dst->indices.size())
-                            errs() << ",";
+                        errs() << " (indices=[";
+                        for (size_t i = 0; i < dst->indices.size(); ++i)
+                        {
+                            errs() << dst->indices[i];
+                            if (i + 1 < dst->indices.size())
+                                errs() << ",";
+                        }
+                        errs() << "])";
                     }
-                    errs() << "])";
+                }
+                else
+                {
+                    errs() << "null";
                 }
                 errs() << "\n";
             }
@@ -228,6 +249,7 @@ namespace llvm
                 llvm::errs() << "No constraints in the worklist.\n";
             }
         }
+
         Node *getOrCreateNode(llvm::Value *value, Context context = Everywhere, std::vector<uint64_t> indices = {}); // create or find node: ctx == Everywhere
         virtual Context getContext(Context context = Everywhere, const Value *newCallSite = nullptr);
         virtual void processInstruction(Instruction &I, CGNode *cgnode);
@@ -249,14 +271,14 @@ namespace llvm
         ChannelSemantics channelSemantics; // Channel semantics integration
 
     protected:
-        int nextNodeId = 0;     // Monotonically increasing node ID
-        llvm::Function *mainFn; // Real main function, not the one "main" for rust
+        uint64_t nextNodeId = 0; // Monotonically increasing node ID
+        llvm::Function *mainFn;  // Real main function, not the one "main" for rust
 
-        PointsToMapTy pointsToMap;
-        llvm::CallGraph callGraph;                  // Call graph to track caller-callee relationships
-        std::unordered_set<Function *> Visited;     // visited functions
-        std::unordered_map<CGNode, int> VisitCount; // Track the number of visits for each function/cgnode
-        std::vector<CGNode> FunctionWorklist;       // Worklist for new functions (with context) to visit
+        std::unordered_map<uint64_t, Node *> idToNodeMap; // Map from node ID to Node
+        llvm::CallGraph callGraph;                        // Call graph to track caller-callee relationships
+        std::unordered_set<Function *> Visited;           // visited functions
+        std::unordered_map<CGNode, int> VisitCount;       // Track the number of visits for each function/cgnode
+        std::vector<CGNode> FunctionWorklist;             // Worklist for new functions (with context) to visit
 
         std::unordered_map<std::tuple<llvm::Value *, Context, std::vector<uint64_t>>, Node *> ValueContextToNodeMap; // Map to track Value and context pairs to Node
 
