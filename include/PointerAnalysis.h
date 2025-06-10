@@ -158,6 +158,7 @@ namespace llvm
         {
             return Visited;
         }
+        const std::unordered_map<uint64_t, Node *> &getIdToNodeMap() const { return idToNodeMap; }
         const std::string getOutputFileName() const { return outputFile; }
 
         const void printStatistics();

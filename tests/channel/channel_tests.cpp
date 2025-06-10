@@ -19,9 +19,9 @@ void run_channel_tests(AFGTestFramework& framework) {
                             "Context-sensitive analysis should maintain or increase precision");
         
         std::cout << "  Channel Creation Analysis:" << std::endl;
-        std::cout << "    Basic: " << basic_result.pointsToMap.size() << " points-to nodes, " 
+        std::cout << "    Basic: " << basic_result.idToNodeMap.size() << " points-to nodes, " 
                   << basic_result.callGraph.numNodes() << " CG nodes" << std::endl;
-        std::cout << "    K-callsite: " << kcs_result.pointsToMap.size() << " points-to nodes, " 
+        std::cout << "    K-callsite: " << kcs_result.idToNodeMap.size() << " points-to nodes, " 
                   << kcs_result.callGraph.numNodes() << " CG nodes" << std::endl;
     }
     
@@ -71,15 +71,15 @@ void run_channel_tests(AFGTestFramework& framework) {
         // Validate precision progression between analysis modes
         framework.assert_true(kcs_result.callGraph.numNodes() >= basic_result.callGraph.numNodes(), 
                             "K-callsite should be at least as precise as basic");
-        framework.assert_true(kcs_result.pointsToMap.size() >= basic_result.pointsToMap.size(), 
+        framework.assert_true(kcs_result.idToNodeMap.size() >= basic_result.idToNodeMap.size(), 
                             "K-callsite should maintain or increase points-to precision for channel flow");
         
         // Print detailed comparison
         std::cout << "  Channel Flow Analysis Comparison:" << std::endl;
         std::cout << "    Basic: " << basic_result.callGraph.numNodes() << " nodes, " 
-                  << basic_result.pointsToMap.size() << " points-to" << std::endl;
+                  << basic_result.idToNodeMap.size() << " points-to" << std::endl;
         std::cout << "    K-callsite: " << kcs_result.callGraph.numNodes() << " nodes, " 
-                  << kcs_result.pointsToMap.size() << " points-to" << std::endl;
+                  << kcs_result.idToNodeMap.size() << " points-to" << std::endl;
     }
     
     // Test 5: Channel data flow constraints correctness
@@ -150,11 +150,11 @@ void run_channel_tests(AFGTestFramework& framework) {
         framework.assert_call_graph_edges_count_greater_than(0, "Should track channel constraint application", basic_result);
         
         // Context-sensitive analysis should maintain constraint validity
-        framework.assert_true(kcs_result.pointsToMap.size() >= basic_result.pointsToMap.size(), 
+        framework.assert_true(kcs_result.idToNodeMap.size() >= basic_result.idToNodeMap.size(), 
                             "Context-sensitive constraints should maintain or increase precision");
         
         std::cout << "  Channel Constraints Integration:" << std::endl;
-        std::cout << "    Basic: " << basic_result.pointsToMap.size() << " constraint nodes" << std::endl;
-        std::cout << "    K-callsite: " << kcs_result.pointsToMap.size() << " constraint nodes" << std::endl;
+        std::cout << "    Basic: " << basic_result.idToNodeMap.size() << " constraint nodes" << std::endl;
+        std::cout << "    K-callsite: " << kcs_result.idToNodeMap.size() << " constraint nodes" << std::endl;
     }
 } 

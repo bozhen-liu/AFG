@@ -176,7 +176,7 @@ struct TestResult {
     std::string actual;
     
     // Direct access to analysis data structures
-    PointerAnalysis::PointsToMapTy pointsToMap;           // Direct access to points-to map
+    std::unordered_map<uint64_t, Node *> idToNodeMap;    // Direct access to node map
     CallGraph callGraph;                                  // Direct access to call graph
     std::unordered_set<Function *> visitedFunctions;     // Direct access to visited functions
     

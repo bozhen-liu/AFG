@@ -150,8 +150,8 @@ void run_pointer_tests(AFGTestFramework& framework) {
         
         // Compare the precision: k-callsite might create more precise analysis
         std::cout << "  Basic analysis - Call graph nodes: " << basic_param.callGraph.numNodes() 
-                  << ", Points-to nodes: " << basic_param.pointsToMap.size() << std::endl;
+                  << ", Points-to nodes: " << basic_param.idToNodeMap.size() << std::endl;
         std::cout << "  K-callsite analysis - Call graph nodes: " << kcs_param.callGraph.numNodes() 
-                  << ", Points-to nodes: " << kcs_param.pointsToMap.size() << std::endl;
+                  << ", Points-to nodes: " << kcs_param.idToNodeMap.size() << std::endl;
     }
 } 

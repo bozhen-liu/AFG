@@ -26,9 +26,9 @@ void run_taint_tests(AFGTestFramework& framework) {
         
         std::cout << "  Taint Configuration Analysis:" << std::endl;
         std::cout << "    Basic: " << basic_result.callGraph.numNodes() << " nodes, " 
-                  << basic_result.pointsToMap.size() << " points-to" << std::endl;
+                  << basic_result.idToNodeMap.size() << " points-to" << std::endl;
         std::cout << "    Origin: " << origin_result.callGraph.numNodes() << " nodes, " 
-                  << origin_result.pointsToMap.size() << " points-to" << std::endl;
+                  << origin_result.idToNodeMap.size() << " points-to" << std::endl;
     }
     
     // Test 2: Origin context tracking with different K values
@@ -64,7 +64,7 @@ void run_taint_tests(AFGTestFramework& framework) {
         framework.assert_true(origin_result.passed, "Origin propagation analysis should succeed");
         
         // Origin should track taint propagation through pointer relationships
-        framework.assert_true(origin_result.pointsToMap.size() >= basic_result.pointsToMap.size(), 
+        framework.assert_true(origin_result.idToNodeMap.size() >= basic_result.idToNodeMap.size(), 
                             "Origin analysis should maintain or enhance points-to relationships for taint tracking");
         
         // Should detect the same function structure but with taint context
@@ -160,11 +160,11 @@ void run_taint_tests(AFGTestFramework& framework) {
         // Print detailed context sensitivity comparison
         std::cout << "  Context-Sensitive Taint Precision:" << std::endl;
         std::cout << "    K=1: " << origin_k1.callGraph.numNodes() << " nodes, " 
-                  << origin_k1.pointsToMap.size() << " points-to" << std::endl;
+                  << origin_k1.idToNodeMap.size() << " points-to" << std::endl;
         std::cout << "    K=2: " << origin_k2.callGraph.numNodes() << " nodes, " 
-                  << origin_k2.pointsToMap.size() << " points-to" << std::endl;
+                  << origin_k2.idToNodeMap.size() << " points-to" << std::endl;
         std::cout << "    K=4: " << origin_k4.callGraph.numNodes() << " nodes, " 
-                  << origin_k4.pointsToMap.size() << " points-to" << std::endl;
+                  << origin_k4.idToNodeMap.size() << " points-to" << std::endl;
         
         // Print detailed analysis for K=2 to show context differentiation
         framework.print_detailed_analysis(origin_k2);

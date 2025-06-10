@@ -37,7 +37,7 @@ public:
         std::string actual;
         
         // Direct access to analysis data structures
-        PointerAnalysis::PointsToMapTy pointsToMap;           // Direct access to points-to map
+        std::unordered_map<uint64_t, Node *> idToNodeMap;    // Direct access to node map
         CallGraph callGraph;                                  // Direct access to call graph
         std::unordered_set<Function *> visitedFunctions;     // Direct access to visited functions
         
@@ -91,7 +91,7 @@ public:
         TestResult result;
         result.passed = true;
         result.message = "Analysis completed successfully";
-        result.pointsToMap = PA->getPointsToMap();
+        result.idToNodeMap = PA->getIdToNodeMap();
         result.callGraph = PA->getCallGraph();
         result.visitedFunctions = PA->getVisitedFunctions();
         
@@ -101,7 +101,7 @@ public:
         std::stringstream detailed_output;
         
         detailed_output << "=== Detailed Call Graph Analysis ===\n";
-        detailed_output << "Points-to nodes: " << result.pointsToMap.size() << "\n";
+        detailed_output << "Points-to nodes: " << result.idToNodeMap.size() << "\n";
         
         // We need to iterate through ALL nodes, not just those with outgoing edges
         // The graph only contains nodes with outgoing edges, but we want all nodes
@@ -171,7 +171,7 @@ public:
         
         // Build the summary output
         std::stringstream summary;
-        summary << "PointsToMap: " << result.pointsToMap.size() << " nodes\n";
+        summary << "PointsToMap: " << result.idToNodeMap.size() << " nodes\n";
         summary << "CallGraph: " << result.callGraph.numNodes() << " nodes, " << result.callGraph.numEdges() << " edges\n";
         summary << "Visited functions: " << result.visitedFunctions.size() << "\n";
         
@@ -257,7 +257,7 @@ public:
     
     // New assertion methods using stored data structures
     void assert_points_to_map_size(int expected, const std::string& message, const TestResult& result) {
-        int actual = result.pointsToMap.size();
+        int actual = result.idToNodeMap.size();
         if (actual == expected) {
             std::cout << "  ✓ " << message << " (found " << actual << " pointer nodes)" << std::endl;
             passed_tests++;
@@ -328,7 +328,7 @@ public:
     }
     
     void assert_points_to_map_size_greater_than(int expected, const std::string& message, const TestResult& result) {
-        int actual = result.pointsToMap.size();
+        int actual = result.idToNodeMap.size();
         if (actual > expected) {
             std::cout << "  ✓ " << message << " (" << actual << " > " << expected << ")" << std::endl;
             passed_tests++;

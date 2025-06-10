@@ -42,11 +42,11 @@ void run_integration_tests(AFGTestFramework& framework) {
         // Print comprehensive comparison
         std::cout << "  End-to-End Analysis Comparison:" << std::endl;
         std::cout << "    Basic (simple.ll): " << basic_result.callGraph.numNodes() << " CG nodes, " 
-                  << basic_result.pointsToMap.size() << " points-to nodes" << std::endl;
+                  << basic_result.idToNodeMap.size() << " points-to nodes" << std::endl;
         std::cout << "    K-callsite (simple.ll): " << kcs_result.callGraph.numNodes() << " CG nodes, " 
-                  << kcs_result.pointsToMap.size() << " points-to nodes" << std::endl;
+                  << kcs_result.idToNodeMap.size() << " points-to nodes" << std::endl;
         std::cout << "    Origin (taint_test.ll): " << origin_result.callGraph.numNodes() << " CG nodes, " 
-                  << origin_result.pointsToMap.size() << " points-to nodes" << std::endl;
+                  << origin_result.idToNodeMap.size() << " points-to nodes" << std::endl;
     }
     
     // Test 2: Complex multi-threaded scenario

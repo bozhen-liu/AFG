@@ -127,9 +127,9 @@ void run_context_tests(AFGTestFramework& framework) {
         
         // Show the progression of precision with K value
         std::cout << "  K-value Precision Progression:" << std::endl;
-        std::cout << "    K=1: " << k1_result.callGraph.numNodes() << " nodes, " << k1_result.pointsToMap.size() << " points-to nodes" << std::endl;
-        std::cout << "    K=2: " << k2_result.callGraph.numNodes() << " nodes, " << k2_result.pointsToMap.size() << " points-to nodes" << std::endl;
-        std::cout << "    K=4: " << k4_result.callGraph.numNodes() << " nodes, " << k4_result.pointsToMap.size() << " points-to nodes" << std::endl;
+        std::cout << "    K=1: " << k1_result.callGraph.numNodes() << " nodes, " << k1_result.idToNodeMap.size() << " points-to nodes" << std::endl;
+        std::cout << "    K=2: " << k2_result.callGraph.numNodes() << " nodes, " << k2_result.idToNodeMap.size() << " points-to nodes" << std::endl;
+        std::cout << "    K=4: " << k4_result.callGraph.numNodes() << " nodes, " << k4_result.idToNodeMap.size() << " points-to nodes" << std::endl;
     }
     
     // Test 6: Context String Format Validation
