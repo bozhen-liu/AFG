@@ -8,6 +8,7 @@
 #include "Flags.h"
 #include <sstream>
 #include <fstream>
+#include <chrono>
 
 using namespace llvm;
 
@@ -36,7 +37,12 @@ namespace
             }
             PA->DebugMode = DebugMode; // Set the debug mode based on the command line option
 
+            auto start = std::chrono::high_resolution_clock::now(); // Start timing
+
             PA->analyze(M);
+
+            auto end = std::chrono::high_resolution_clock::now(); // End timing
+            std::chrono::duration<double> elapsed = end - start;
 
             // Output the results to a file
             std::ofstream outFile(PA->getOutputFileName()); // Open the output file
@@ -77,6 +83,9 @@ namespace
             {
                 errs() << "Error: Could not open file for writing results.\n";
             }
+
+            errs() << "=== Pointer analysis time ===\n"
+                   << elapsed.count() << " seconds\n";
 
             PA->printStatistics(); // Print statistics to stderr
 

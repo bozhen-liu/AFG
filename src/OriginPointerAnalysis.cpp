@@ -1,5 +1,4 @@
 #include "OriginPointerAnalysis.h"
-#include "llvm/Demangle/Demangle.h"
 #include "llvm/Support/raw_ostream.h"
 #include "llvm/ADT/SmallString.h"
 #include "llvm/Support/Path.h"
@@ -7,18 +6,11 @@
 #include "Flags.h"
 #include <fstream>
 #include <nlohmann/json.hpp>
+#include "Util.h"
 
 using nlohmann::json;
 
 using namespace llvm;
-
-// Helper function to trim leading and trailing spaces
-static inline std::string trim(const std::string &str)
-{
-    auto start = str.find_first_not_of(" \t");
-    auto end = str.find_last_not_of(" \t");
-    return (start == std::string::npos) ? "" : str.substr(start, end - start + 1);
-}
 
 static bool isThreadRelatedCallInstruction(const Value *callsite)
 {
@@ -38,13 +30,7 @@ static bool isThreadRelatedCallInstruction(const Value *callsite)
         if (const Function *callee = call->getCalledFunction())
         {
             std::string mangledName = callee->getName().str();
-            std::string demangled = llvm::demangle(mangledName); // the output looks like "std::thread::spawn::hc6f148c1a1888888"
-            // Remove hash suffix: keep up to the last "::"
-            size_t last_colon = demangled.rfind("::");
-            if (last_colon != std::string::npos)
-            {
-                demangled = demangled.substr(0, last_colon);
-            }
+            std::string demangled = getDemangledName(mangledName);
 
             if (DebugMode)
                 errs() << "Demangled name: " << demangled << "\n";

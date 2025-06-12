@@ -65,6 +65,7 @@
         "iostream": "cpp",
         "iomanip": "cpp",
         "bitset": "cpp",
-        "regex": "cpp"
+        "regex": "cpp",
+        "*.def": "cpp"
     }
 }
