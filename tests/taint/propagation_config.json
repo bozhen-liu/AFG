@@ -1,0 +1,5 @@
+{
+    "tagged_objects": [
+        "%source = alloca i32, align 4"
+    ]
+}
