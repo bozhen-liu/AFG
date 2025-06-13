@@ -9,6 +9,7 @@
 #include <llvm/ADT/SmallString.h>
 #include "llvm/Support/FileSystem.h"
 #include <queue>
+#include <set>
 #include "Util.h"
 
 using json = nlohmann::json;
@@ -93,7 +94,8 @@ llvm::Function *PointerAnalysis::parseMainFn(Module &M)
             Function *calledFunc = callInst->getCalledFunction();
             if (calledFunc && calledFunc->getName().contains("lang_start"))
             {
-                errs() << "Found lang_start call at instruction " << (instructionCount + 1) << "\n";
+                if (DebugMode)
+                    errs() << "Found lang_start call at instruction " << (instructionCount + 1) << "\n";
 
                 // The first argument to lang_start is the real main function
                 if (callInst->arg_size() > 0)
@@ -193,14 +195,64 @@ void PointerAnalysis::onthefly(Module &M)
     }
 }
 
+// Exclude standard math/string functions (update accordingly)
+static const std::set<std::string> excludedStdFuncs = {
+    "memset", "bzero", "strlen", "strcmp", "sin", "cos", "sqrt", "exit", "abort", "panic"};
+
+// TODO: update accordingly
+bool PointerAnalysis::excludeFunctionFromAnalysis(Function *F)
+{
+    if (!F)
+        return true;
+    StringRef name = F->getName();
+
+    // Exclude LLVM intrinsics and debug/info functions
+    if (name.startswith("llvm.dbg.") ||
+        name.startswith("llvm.lifetime.") ||
+        name.startswith("llvm.assume") ||
+        name.startswith("llvm.expect") ||
+        name.startswith("llvm.stackprotector.") ||
+        name.startswith("llvm.va_") ||
+        name.startswith("llvm.trap") ||
+        name.startswith("llvm.ubsan.") ||
+        name.startswith("llvm.donothing") ||
+        name.startswith("llvm.invariant.") ||
+        name.startswith("llvm.prefetch") ||
+        name.startswith("llvm.objectsize.") ||
+        name.startswith("__asan_") ||
+        name.startswith("__tsan_") ||
+        name.startswith("__msan_") ||
+        name.startswith("__cxa_") ||
+        name.startswith("__rust_probestack") ||
+        name.startswith("__rust_alloc") || // may need to model the following rust functions
+        name.startswith("__rust_alloc_zeroed") ||
+        name.startswith("__rust_alloc_extern") ||
+        name.startswith("__rust_dealloc") ||
+        name.startswith("__rust_realloc"))
+    {
+        if (DebugMode)
+            errs() << "Excluding function from analysis: " << name << "\n";
+        return true;
+    }
+
+    if (excludedStdFuncs.count(name.str()))
+    {
+        if (DebugMode)
+            errs() << "Excluding standard function from analysis: " << name << "\n";
+        return true;
+    }
+
+    return false;
+}
+
 void PointerAnalysis::AddToFunctionWorklist(CGNode *callee)
 {
     Function *calleeFn = callee->function;
     if (!callee || calleeFn->isDeclaration() || Visited.count(calleeFn))
         return;
 
-    // Only add the function to the worklist if it has been visited fewer than two times
-    if (VisitCount[*callee] < 2 && !Visited.count(calleeFn))
+    // Only add the function to the worklist if it has been visited fewer than MaxVisit times
+    if (VisitCount[*callee] <= MaxVisit && !Visited.count(calleeFn))
     {
         if (DebugMode)
             errs() << "Adding function: " << calleeFn->getFunction().getName() << "\n";
@@ -217,7 +269,7 @@ void PointerAnalysis::visitFunction(CGNode *cgnode)
 
     // Increment the visit count for the function
     VisitCount[*cgnode]++;
-    if (VisitCount[*cgnode] > 2) // Skip the function if it has already been visited twice
+    if (VisitCount[*cgnode] > MaxVisit) // Skip the function if it has already been visited MaxVisit times
         return;
 
     Visited.insert(F);
@@ -236,16 +288,20 @@ void PointerAnalysis::visitFunction(CGNode *cgnode)
 
 Node *PointerAnalysis::getOrCreateNode(llvm::Value *value, Context context, std::vector<uint64_t> offsets)
 {
+    // Ignore pointers with .dbg. in their name (e.g., %ret.dbg.spill), which are for debug purposes only
+    if (isDbgPointer(value))
+    {
+        if (DebugMode)
+            errs() << "Ignoring dbg pointer: " << value->getName() << "\n";
+        return nullptr;
+    }
+
     if (isa<GlobalVariable>(value) || isa<GlobalAlias>(value) || isa<GlobalIFunc>(value))
     {
         context = Everywhere; // Global variables are considered everywhere
     }
-    // if (DebugMode && isa<GetElementPtrInst>(value) && offsets.empty())
-    // {
-    //     errs() << "Warning: getOrCreateNode called with GetElementPtrInst without offsets. This may lead to incorrect analysis.\n"
-    //            << "\t Value: " << *value << "\n";
-    // }
 
+    // Check if the node already exists in the map
     auto it = ValueContextToNodeMap.find(std::make_tuple(value, context, offsets));
     if (it != ValueContextToNodeMap.end())
     {
@@ -402,6 +458,9 @@ void PointerAnalysis::visitAllocaInst(AllocaInst &AI)
 
     // Handle non-tagged allocas
     Node *aiNode = getOrCreateNode(&AI, getContext());
+    if (!aiNode)
+        return;
+
     addConstraint({Assign, UINT64_MAX, aiNode->id}); // Points to self
 
     // Generate AddressOf constraints for uses of this alloca
@@ -413,6 +472,8 @@ void PointerAnalysis::visitAllocaInst(AllocaInst &AI)
             if (I->getType()->isPointerTy())
             {
                 Node *useNode = getOrCreateNode(const_cast<Instruction *>(I), getContext());
+                if (!useNode)
+                    continue;
                 addConstraint({AddressOf, aiNode->id, useNode->id});
             }
         }
@@ -429,6 +490,8 @@ void PointerAnalysis::visitBitCastInst(BitCastInst &BC)
         Value *basePtr = BC.getOperand(0);
         Node *basePtrNode = getOrCreateNode(basePtr, getContext());
         Node *bcNode = getOrCreateNode(&BC, getContext());
+        if (!basePtrNode || !bcNode)
+            return;
         addConstraint({Assign, basePtrNode->id, bcNode->id});
     }
 }
@@ -440,25 +503,27 @@ void PointerAnalysis::visitStoreInst(StoreInst &SI)
 
     Value *val = SI.getValueOperand();
     Value *ptr = SI.getPointerOperand();
-
-    // Field-sensitive: extract offsets if ptr is a GEP
-    std::vector<uint64_t> offsets;
-    if (auto *gep = dyn_cast<GetElementPtrInst>(ptr))
-    {
-        for (auto idx = gep->idx_begin(); idx != gep->idx_end(); ++idx)
-        {
-            if (auto *constIdx = dyn_cast<ConstantInt>(idx))
-                offsets.push_back(constIdx->getZExtValue());
-            else
-                offsets.push_back(~0ULL); // Unknown index
-        }
-    }
-
     if (val->getType()->isPointerTy())
     {
         // src -store-> dst (offsets)
         Node *valNode = getOrCreateNode(val, getContext());
         Node *ptrNode = getOrCreateNode(ptr, getContext());
+        if (!valNode || !ptrNode)
+            return;
+
+        // Field-sensitive: extract offsets if ptr is a GEP
+        std::vector<uint64_t> offsets;
+        if (auto *gep = dyn_cast<GetElementPtrInst>(ptr))
+        {
+            for (auto idx = gep->idx_begin(); idx != gep->idx_end(); ++idx)
+            {
+                if (auto *constIdx = dyn_cast<ConstantInt>(idx))
+                    offsets.push_back(constIdx->getZExtValue());
+                else
+                    offsets.push_back(~0ULL); // Unknown index
+            }
+        }
+
         addConstraint({Store, valNode->id, ptrNode->id, offsets});
     }
 }
@@ -469,25 +534,27 @@ void PointerAnalysis::visitLoadInst(LoadInst &LI)
         errs() << "Processing load: " << LI << "\n";
 
     Value *ptr = LI.getPointerOperand();
-
-    // Field-sensitive: extract offsets if ptr is a GEP
-    std::vector<uint64_t> offsets;
-    if (auto *gep = dyn_cast<GetElementPtrInst>(ptr))
-    {
-        for (auto idx = gep->idx_begin(); idx != gep->idx_end(); ++idx)
-        {
-            if (auto *constIdx = dyn_cast<ConstantInt>(idx))
-                offsets.push_back(constIdx->getZExtValue());
-            else
-                offsets.push_back(~0ULL); // Unknown index
-        }
-    }
-
     if (LI.getType()->isPointerTy())
     {
         // src (offsets) -load-> dst
         Node *ptrNode = getOrCreateNode(ptr, getContext());
         Node *loadNode = getOrCreateNode(&LI, getContext());
+        if (!ptrNode || !loadNode)
+            return;
+
+        // Field-sensitive: extract offsets if ptr is a GEP
+        std::vector<uint64_t> offsets;
+        if (auto *gep = dyn_cast<GetElementPtrInst>(ptr))
+        {
+            for (auto idx = gep->idx_begin(); idx != gep->idx_end(); ++idx)
+            {
+                if (auto *constIdx = dyn_cast<ConstantInt>(idx))
+                    offsets.push_back(constIdx->getZExtValue());
+                else
+                    offsets.push_back(~0ULL); // Unknown index
+            }
+        }
+
         addConstraint({Load, ptrNode->id, loadNode->id, offsets});
     }
 }
@@ -500,6 +567,11 @@ void PointerAnalysis::visitGetElementPtrInst(GetElementPtrInst &GEP)
     if (GEP.getType()->isPointerTy())
     {
         Value *basePtr = GEP.getPointerOperand();
+        Node *basePtrNode = getOrCreateNode(basePtr, getContext());
+        Node *gepNode = getOrCreateNode(&GEP, getContext());
+        if (!basePtrNode || !gepNode)
+            return;
+
         // Handle struct field or array access
         std::vector<uint64_t> offsets;
         for (auto idx = GEP.idx_begin(); idx != GEP.idx_end(); ++idx)
@@ -507,17 +579,10 @@ void PointerAnalysis::visitGetElementPtrInst(GetElementPtrInst &GEP)
             if (auto *constIdx = dyn_cast<ConstantInt>(idx))
                 offsets.push_back(constIdx->getZExtValue());
             else
-                offsets.push_back(~0ULL); // Unknown index
+                offsets.push_back(~0ULL); // Unknown index, e.g., variable
         }
-        Node *basePtrNode = getOrCreateNode(basePtr, getContext());
-        Node *gepNode = getOrCreateNode(&GEP, getContext());
-        addConstraint({Offset, basePtrNode->id, gepNode->id, offsets});
 
-        if (basePtr->getType()->isPointerTy())
-        {
-            // If the base pointer is also a pointer, add a constraint
-            addConstraint({Assign, gepNode->id, basePtrNode->id});
-        }
+        addConstraint({Offset, basePtrNode->id, gepNode->id, offsets});
     }
 }
 
@@ -530,6 +595,8 @@ void PointerAnalysis::visitUnaryOperator(UnaryOperator &UO)
         {
             Node *srcNode = getOrCreateNode(UO.getOperand(0), getContext());
             Node *dstNode = getOrCreateNode(&UO, getContext());
+            if (!srcNode || !dstNode)
+                return;
             addConstraint({AddressOf, srcNode->id, dstNode->id});
         }
     }
@@ -545,6 +612,8 @@ void PointerAnalysis::visitExtractValueInst(ExtractValueInst &EVI)
         Value *aggregate = EVI.getAggregateOperand();
         Node *aggNode = getOrCreateNode(aggregate, getContext());
         Node *resultNode = getOrCreateNode(&EVI, getContext());
+        if (!aggNode || !resultNode)
+            return;
         addConstraint({Assign, aggNode->id, resultNode->id});
     }
 }
@@ -561,6 +630,8 @@ void PointerAnalysis::visitPHINode(PHINode &PN)
             Value *incoming = PN.getIncomingValue(i);
             Node *incomingNode = getOrCreateNode(incoming, getContext());
             Node *PNNode = getOrCreateNode(&PN, getContext());
+            if (!incomingNode || !PNNode)
+                return;
             addConstraint({Assign, incomingNode->id, PNNode->id});
         }
     }
@@ -576,6 +647,8 @@ void PointerAnalysis::visitAtomicRMWInst(AtomicRMWInst &ARMW)
     {
         Node *ptrNode = getOrCreateNode(ptr, getContext());
         Node *valNode = getOrCreateNode(ARMW.getValOperand(), getContext());
+        if (!ptrNode || !valNode)
+            return;
         addConstraint({Store, valNode->id, ptrNode->id});
     }
 }
@@ -590,6 +663,8 @@ void PointerAnalysis::visitAtomicCmpXchgInst(AtomicCmpXchgInst &ACX)
     {
         Node *ptrNode = getOrCreateNode(ptr, getContext());
         Node *newValNode = getOrCreateNode(ACX.getNewValOperand(), getContext());
+        if (!ptrNode || !newValNode)
+            return;
         addConstraint({Store, newValNode->id, ptrNode->id});
     }
 }
@@ -602,6 +677,11 @@ void PointerAnalysis::visitInvokeInst(InvokeInst &II)
     Function *calledFn = II.getCalledFunction();
     if (calledFn) // handle direct calls
     {
+        if (excludeFunctionFromAnalysis(II.getCalledFunction()))
+        {
+            return;
+        }
+
         if (DebugMode)
             errs() << "Direct call to function: " << calledFn->getName() << "\n";
 
@@ -624,6 +704,8 @@ void PointerAnalysis::visitInvokeInst(InvokeInst &II)
                 Node *argNode = getOrCreateNode(arg, CurrentContext);
                 Argument *param = calledFn->getArg(i);
                 Node *paramNode = getOrCreateNode(param, CurrentContext);
+                if (!argNode || !paramNode)
+                    continue; // Skip if nodes cannot be created
                 addConstraint({Assign, argNode->id, paramNode->id});
             }
         }
@@ -633,16 +715,19 @@ void PointerAnalysis::visitInvokeInst(InvokeInst &II)
         {
             Node *calledFnNode = getOrCreateNode(calledFn, CurrentContext);
             Node *returnNode = getOrCreateNode(&II, CurrentContext);
+            if (!calledFnNode || !returnNode)
+                return; // Skip if nodes cannot be created
             addConstraint({Assign, calledFnNode->id, returnNode->id});
         }
 
         // Visit the callee
         AddToFunctionWorklist(&callee);
+        return;
     }
 
     // Handle indirect calls (e.g., via vtable)
     Value *calledValue = II.getCalledOperand();
-    if (!calledFn && calledValue->getType()->isPointerTy())
+    if (HandleIndirectCalls && !calledFn && calledValue->getType()->isPointerTy())
     {
         if (DebugMode)
             errs() << "Indirect call to value: " << *calledValue << "\n";
@@ -651,6 +736,8 @@ void PointerAnalysis::visitInvokeInst(InvokeInst &II)
         // usually the first argument in the invoke or call when calling a virtual or trait method.
         Node *basePtrNode = getOrCreateNode(II.getArgOperand(0), CurrentContext);
         Node *callNode = getOrCreateNode(&II, CurrentContext);
+        if (!basePtrNode || !callNode)
+            return; // Skip if nodes cannot be created
         addConstraint({Invoke, basePtrNode->id, callNode->id});
     }
 }
@@ -670,6 +757,16 @@ void PointerAnalysis::visitCallInst(CallInst &CI)
     Function *calledFn = CI.getCalledFunction();
     if (calledFn)
     {
+        if (excludeFunctionFromAnalysis(calledFn))
+        {
+            return;
+        }
+
+        if (handleRustTry(CI, calledFn))
+        {
+            return; // done processing for __rust_try
+        }
+
         // Add to the call graph
         CGNode callee = callGraph.getOrCreateNode(calledFn, CurrentContext);
         callGraph.addEdge(*CurrentCGNode, callee);
@@ -677,7 +774,7 @@ void PointerAnalysis::visitCallInst(CallInst &CI)
         if (calledFn->isDeclaration())
         {
             handleDeclaredFunction(CI, calledFn, callee);
-            return; // Skip declarations
+            return; // done processing for declarations
         }
 
         // Add constraints for parameter passing
@@ -689,6 +786,8 @@ void PointerAnalysis::visitCallInst(CallInst &CI)
                 Node *argNode = getOrCreateNode(arg, CurrentContext);
                 Argument *param = calledFn->getArg(i);
                 Node *paramNode = getOrCreateNode(param, CurrentContext);
+                if (!argNode || !paramNode)
+                    continue; // Skip if nodes cannot be created
                 addConstraint({Assign, argNode->id, paramNode->id});
             }
         }
@@ -698,18 +797,22 @@ void PointerAnalysis::visitCallInst(CallInst &CI)
         {
             Node *calledFnNode = getOrCreateNode(calledFn, CurrentContext);
             Node *returnNode = getOrCreateNode(&CI, CurrentContext);
+            if (!calledFnNode || !returnNode)
+                return; // Skip if nodes cannot be created
             addConstraint({Assign, calledFnNode->id, returnNode->id});
         }
 
         // Visit the callee
         AddToFunctionWorklist(&callee);
     }
-    else if (!calledFn && CI.getCalledOperand()->getType()->isPointerTy())
+    else if (HandleIndirectCalls && !calledFn && CI.getCalledOperand()->getType()->isPointerTy())
     {
         // Handle indirect calls
         // usually the first argument in the invoke or call when calling a virtual or trait method.
-        Node *basePtrNode = getOrCreateNode(CI.getArgOperand(0), CurrentContext);
+        Node *basePtrNode = getOrCreateNode(CI.getCalledOperand(), CurrentContext);
         Node *callNode = getOrCreateNode(&CI, CurrentContext);
+        if (!basePtrNode || !callNode)
+            return; // Skip if nodes cannot be created
         addConstraint({Invoke, basePtrNode->id, callNode->id});
     }
     else if (CI.isInlineAsm())
@@ -718,6 +821,54 @@ void PointerAnalysis::visitCallInst(CallInst &CI)
         if (DebugMode)
             errs() << "TODO: CallInst is InlineAsm: " << CI << "\n";
     }
+}
+
+// handle __rust_try:
+// define internal i32 @__rust_try(ptr %0, ptr %1, ptr %2) ... {
+//     invoke void %0(ptr %1) // we directly link to the function pointed by %0 with data pointer %1
+// }
+// return true if handled, false if not
+// TODO: we may see __rust_try_resume
+bool PointerAnalysis::handleRustTry(CallBase &CB, Function *F)
+{
+    // Check if the function is __rust_try
+    if (F->getName() == "__rust_try")
+    {
+        if (DebugMode)
+            errs() << "Handling __rust_try call: " << CB << "\n";
+
+        // Get the arguments: 3rd is for catch -> not important, ignore it
+        Value *arg1 = CB.getArgOperand(0);
+        Value *arg2 = CB.getArgOperand(1);
+
+        if (Function *realCallee = dyn_cast<Function>(arg1))
+        {
+            if (DebugMode)
+                errs() << "Found __rust_try with direct function call: " << realCallee->getName() << "\n";
+
+            // Handle direct calls to a function
+            // Add to the call graph
+            CGNode callee = callGraph.getOrCreateNode(realCallee, CurrentContext);
+            callGraph.addEdge(*CurrentCGNode, callee); // skip __rust_try here
+
+            // Add constraints for parameter passing
+            if (arg2->getType()->isPointerTy())
+            {
+                Node *dataPtrNode = getOrCreateNode(arg2, CurrentContext);
+                Argument *param = realCallee->getArg(0);
+                Node *paramNode = getOrCreateNode(param, CurrentContext);
+                if (!dataPtrNode || !paramNode)
+                    return false; // Skip if nodes cannot be created
+                addConstraint({Assign, dataPtrNode->id, paramNode->id});
+            }
+
+            // from __rust_try: ret i32 0 or ret i32 1 -> not important, ignore return value
+            AddToFunctionWorklist(&callee);
+        }
+        return true;
+    }
+
+    return false;
 }
 
 // TODO: more declarations to handle, e.g., locks
@@ -740,6 +891,8 @@ void PointerAnalysis::handleDeclaredFunction(CallBase &CB, Function *F, CGNode r
         {
             Node *srcNode = getOrCreateNode(arg1, CurrentContext);
             Node *dstNode = getOrCreateNode(arg2, CurrentContext);
+            if (!srcNode || !dstNode)
+                return; // Skip if nodes cannot be created
             addConstraint({Assign, srcNode->id, dstNode->id});
         }
         return;
@@ -844,19 +997,20 @@ void PointerAnalysis::addConstraint(const Constraint &constraint)
 
     case AddressOf:
     case Offset:
-    case Store:
+    case Load:
     case Invoke:
         DU[constraint.lhs_id].push_back(constraint);
         break;
-
-    case Load:
+    case Store: // rhs is the base ptr
         DU[constraint.rhs_id].push_back(constraint);
         break;
+
     case Channel:
         // Channel constraints do not have lhs_id or rhs_id, TODO: we need to update DU
         if (DebugMode)
             errs() << "Channel constraint added.\n";
         break;
+
     default:
         if (DebugMode)
             errs() << "Unknown constraint type: " << static_cast<int>(constraint.type) << "\n";
@@ -872,8 +1026,7 @@ void PointerAnalysis::sortConstraints()
 {
     if (DebugMode)
     {
-        errs() << "=== Solving Constraints ===\n";
-        errs() << "Worklist size: " << Worklist.size() << "\n";
+        errs() << "=== Sorting Constraints ===\n";
     }
 
     // Build dependency graph: lhs_id -> rhs_id
@@ -936,13 +1089,15 @@ void PointerAnalysis::solveConstraints()
         errs() << "=== Solving Constraints ===\n";
     }
 
+    int iteration = 0;
     std::vector<Constraint> tmpWorklist;
     while (!Worklist.empty())
     {
         // if (DebugMode)
         {
-            errs() << "Worklist size: " << Worklist.size() << "\n";
+            errs() << iteration << ": Worklist size: " << Worklist.size() << "\n";
         }
+        iteration++;
 
         sortConstraints(); // Sort constraints before solving
         // copy Worklist to tmpWorklist to avoid modifying the original worklist during processing
@@ -1036,17 +1191,15 @@ void PointerAnalysis::processAssignConstraint(const llvm::Constraint &constraint
 
     if (changed)
     {
-
-        if (dst->value && dst->value->hasName() && dst->value->getName().contains("_44.1"))
+        if (DebugMode)
         {
-            errs() << "Assign constraint changed for node: " << *dst->value << "\n";
-            errs() << "New pts: ";
+            errs() << "\t Assign constraint changed for node: " << *dst->value << "\n";
+            errs() << "\t New pts: ";
             for (auto id : dst->pts)
             {
                 errs() << id << " ";
             }
-            errs() << "\n";
-            errs() << "New diff: ";
+            errs() << "\t  New diff : ";
             for (auto id : dst->diff)
             {
                 errs() << id << " ";
@@ -1096,11 +1249,6 @@ void PointerAnalysis::processGEPConstraint(const llvm::Constraint &constraint)
     }
 
     // dst points to whatever src points to (field-sensitive GEP)
-    if (constraint.lhs_id == UINT64_MAX)
-    {
-        return;
-    }
-
     // src is the base pointer, dst is the GEP result
     auto &src = idToNodeMap[constraint.lhs_id];
     auto &dst = idToNodeMap[constraint.rhs_id];
@@ -1113,6 +1261,8 @@ void PointerAnalysis::processGEPConstraint(const llvm::Constraint &constraint)
             continue; // Skip if target not found
         }
         Node *fieldPtrNode = getOrCreateNode(objNode->value, objNode->context, constraint.offsets);
+        if (!fieldPtrNode)
+            continue;
         addConstraint({Assign, fieldPtrNode->id, dst->id});
     }
 }
@@ -1122,11 +1272,6 @@ void PointerAnalysis::processLoadConstraint(const llvm::Constraint &constraint)
     if (DebugMode)
     {
         errs() << "Processing Load constraint: " << constraint << "\n";
-    }
-
-    if (constraint.lhs_id == UINT64_MAX)
-    {
-        return;
     }
 
     // src is the base pointer
@@ -1142,6 +1287,8 @@ void PointerAnalysis::processLoadConstraint(const llvm::Constraint &constraint)
             continue; // Skip if target not found
         }
         Node *fieldPtrNode = getOrCreateNode(objNode->value, objNode->context, constraint.offsets);
+        if (!fieldPtrNode)
+            continue; // Skip if node cannot be created
         addConstraint({Assign, fieldPtrNode->id, dst->id});
     }
 }
@@ -1151,10 +1298,6 @@ void PointerAnalysis::processStoreConstraint(const llvm::Constraint &constraint)
     if (DebugMode)
     {
         errs() << "Processing Store constraint: " << constraint << "\n";
-    }
-    if (constraint.lhs_id == UINT64_MAX)
-    {
-        return;
     }
 
     auto &src = idToNodeMap[constraint.lhs_id];
@@ -1169,13 +1312,15 @@ void PointerAnalysis::processStoreConstraint(const llvm::Constraint &constraint)
             continue; // Skip if target not found
         }
         Node *fieldPtrNode = getOrCreateNode(objNode->value, objNode->context, constraint.offsets);
+        if (!fieldPtrNode)
+            continue; // Skip if node cannot be created
         addConstraint({Assign, src->id, fieldPtrNode->id});
     }
 }
 
 void PointerAnalysis::processInvokeConstraints(const llvm::Constraint &constraint)
 {
-    // if (DebugMode)
+    if (DebugMode)
     {
         errs() << "Processing Invoke constraint: " << constraint << "\n";
     }
@@ -1186,7 +1331,7 @@ void PointerAnalysis::processInvokeConstraints(const llvm::Constraint &constrain
     Node *callNode = idToNodeMap[constraint.rhs_id];
     std::unordered_set<uint64_t> cmp = baseNode->diff.empty() ? baseNode->pts : baseNode->diff;
 
-    // if (DebugMode)
+    if (DebugMode)
     {
         errs() << "\t(solver) Base node: " << *baseNode << "\n";
         // print out cmp
@@ -1214,14 +1359,15 @@ void PointerAnalysis::processInvokeConstraints(const llvm::Constraint &constrain
 
         Value *targetValue = targetNode->value;
 
-        errs() << "\t(solver) Processing target value: " << *targetValue << "\n";
+        if (DebugMode)
+            errs() << "\t(solver) Processing target value: " << *targetValue << "\n";
 
         // TODO: other cases?
         // Case 1: Direct function pointer
         if (Function *indirectFn = dyn_cast<Function>(targetValue))
         {
-            // if (DebugMode)
-            errs() << "(solver) Processing indirect function call to: " << indirectFn->getName() << "\n";
+            if (DebugMode)
+                errs() << "(solver) Processing indirect function call to: " << indirectFn->getName() << "\n";
 
             Context ctx = baseNode->context;
             // Dispatch to the function directly
@@ -1239,6 +1385,8 @@ void PointerAnalysis::processInvokeConstraints(const llvm::Constraint &constrain
                         Node *argNode = getOrCreateNode(arg, ctx);
                         Argument *param = indirectFn->getArg(i);
                         Node *paramNode = getOrCreateNode(param, ctx);
+                        if (!argNode || !paramNode)
+                            continue; // Skip if nodes cannot be created
                         addConstraint({Assign, argNode->id, paramNode->id});
                     }
                 }
@@ -1247,6 +1395,8 @@ void PointerAnalysis::processInvokeConstraints(const llvm::Constraint &constrain
                 {
                     Node *indirectFnNode = getOrCreateNode(indirectFn, ctx);
                     Node *returnNode = getOrCreateNode(callNode->value, ctx);
+                    if (!indirectFnNode || !returnNode)
+                        continue; // Skip if nodes cannot be created
                     addConstraint({Assign, indirectFnNode->id, returnNode->id});
                 }
             }
@@ -1269,13 +1419,13 @@ void PointerAnalysis::processInvokeConstraints(const llvm::Constraint &constrain
                 Function *F = CB->getCalledFunction();
                 std::string demangledName = getDemangledName(F->getName().str());
 
-                // if (DebugMode)
-                errs() << "Demangled name: " << demangledName << "\n";
+                if (DebugMode)
+                    errs() << "Demangled name: " << demangledName << "\n";
 
                 if (demangledName == "std::sys::unix::thread::Thread::new")
                 {
-                    // if (DebugMode)
-                    errs() << "(solver) Processing vtable function: " << demangledName << "\n";
+                    if (DebugMode)
+                        errs() << "(solver) Processing vtable function: " << demangledName << "\n";
 
                     // the IR pattern can be found in channel-test-full.ll and demo-r68_llvm17_map.ll in examples folder
                     Value *dataPtr = CB->getArgOperand(2); // 3rd: dataPtr
@@ -1311,7 +1461,8 @@ void PointerAnalysis::processInvokeConstraints(const llvm::Constraint &constrain
                             addConstraint({Assign, dataPtrNode->id, paramNode->id});
 
                             // Visit the callee
-                            errs() << "(solver) Adding callee to worklist: " << calledFn->getName() << "\n";
+                            if (DebugMode)
+                                errs() << "(solver) Adding callee to worklist: " << calledFn->getName() << "\n";
                             AddToFunctionWorklist(&callee);
                         }
                     }
@@ -1360,24 +1511,12 @@ bool PointerAnalysis::handleChannelConstraints()
 
 void PointerAnalysis::propagateDiff(uint64_t id)
 {
-
-    bool print = false;
-    auto it = idToNodeMap.find(id);
-    if (it != idToNodeMap.end())
-    {
-        Node *dst = it->second;
-        if (dst->value && dst->value->hasName() && dst->value->getName().contains("_44.1"))
-        {
-            print = true;
-        }
-    }
-
     for (const auto &c : DU[id])
     {
         Worklist.push_back(c);
-        if (print)
+        if (DebugMode)
         {
-            errs() << "Propagating diff for id: " << id << ", constraint: " << c << "\n";
+            errs() << "\t Propagating diff for id: " << id << ", constraint: " << c << "\n";
         }
     }
 }

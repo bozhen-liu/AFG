@@ -24,3 +24,16 @@ inline std::string getDemangledName(std::string mangledName)
 
     return demangled;
 }
+
+// check if a value is a debug pointer, e.g., %f.dbg.spill
+static bool isDbgPointer(const llvm::Value *V)
+{
+    if (!V)
+        return false;
+    if (const auto *inst = llvm::dyn_cast<llvm::Instruction>(V))
+    {
+        llvm::StringRef name = inst->getName();
+        return name.contains(".dbg.");
+    }
+    return false;
+}

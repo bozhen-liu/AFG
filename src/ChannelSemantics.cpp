@@ -247,6 +247,14 @@ void ChannelSemantics::applyChannelConstraints(PointerAnalysis *analysis)
 
 void ChannelSemantics::printChannelInfo(llvm::raw_ostream &os)
 {
+
+    if (channels.empty() && channel_operations.empty() && channel_map.empty())
+    {
+        os << "=== No channel found ===\n";
+        return;
+    }
+
+    // Print channel semantics analysis summary
     os << "=== Channel Semantics Analysis ===\n";
 
     os << "Channel Instances (" << channels.size() << "):\n";

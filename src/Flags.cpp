@@ -17,3 +17,13 @@ cl::opt<bool> DebugMode(
     "debug",
     cl::desc("Enable debug mode"),
     cl::init(false));
+
+cl::opt<bool> HandleIndirectCalls(
+    "indirect",
+    cl::desc("Enable handling of indirect function calls"),
+    cl::init(false));
+
+cl::opt<unsigned> MaxVisit(
+    "max-visit",
+    cl::desc("Maximum number of times a CGNode can be visited"),
+    cl::init(2));

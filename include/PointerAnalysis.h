@@ -255,11 +255,14 @@ namespace llvm
         return os;
     }
 
+    // PointerAnalysis class: performs pointer analysis on LLVM IR
     class PointerAnalysis : public InstVisitor<PointerAnalysis>
     {
     public:
-        // Debug flag to enable or disable debugging output
-        bool DebugMode = false;
+        // settings
+        bool DebugMode = false;          // Debug flag to enable or disable debugging output
+        int MaxVisit = 2;                // Maximum number of times a CGNode can be visited
+        bool HandleIndirectCalls = true; // Whether to handle indirect calls
 
         virtual void analyze(Module &M);
         const CallGraph &getCallGraph() const { return callGraph; }
@@ -311,6 +314,7 @@ namespace llvm
         void processLoadConstraint(const llvm::Constraint &constraint);
         void processStoreConstraint(const llvm::Constraint &constraint);
         void processInvokeConstraints(const llvm::Constraint &constraint);                      // Process constraints for indirect invoke instructions
+        bool handleRustTry(CallBase &CB, Function *F);                                          // handle __rust_try
         void handleDeclaredFunction(CallBase &CI, Function *F, CGNode realCaller = NullCGNode); // Handle certain declared functions: call invoked through vtable needs realCaller
 
         ChannelSemantics channelSemantics; // Channel semantics integration
@@ -329,6 +333,7 @@ namespace llvm
         std::unordered_map<ConstantAggregate *, std::vector<Function *>> vtableToFunctionMap;                        // Map to track vtable to function mappings
 
         std::vector<llvm::Function *> getVtable(GlobalVariable *GV); // compute vtable's functions and store to vtableToFunctionMap
+        bool excludeFunctionFromAnalysis(Function *F);               // Exclude certain functions from analysis, e.g., llvm.dbg.declare
         void AddToFunctionWorklist(CGNode *callee);
         virtual void processGlobalVar(GlobalVariable &GV);
         void visitFunction(CGNode *cgnode);

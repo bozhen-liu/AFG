@@ -35,7 +35,9 @@ namespace
                 PA = std::make_unique<PointerAnalysis>();
                 errs() << "Running context-insensitive pointer analysis\n";
             }
-            PA->DebugMode = DebugMode; // Set the debug mode based on the command line option
+            PA->DebugMode = DebugMode;                     // Set the debug mode based on the command line option
+            PA->MaxVisit = MaxVisit;                       // Set the maximum visit count
+            PA->HandleIndirectCalls = HandleIndirectCalls; // Set whether to handle indirect calls
 
             auto start = std::chrono::high_resolution_clock::now(); // Start timing
 
