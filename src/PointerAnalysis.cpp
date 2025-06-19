@@ -23,6 +23,7 @@ void PointerAnalysis::analyze(Module &M)
         return;
     }
 
+    channelSemantics = new ChannelSemantics(this); // Initialize channel semantics
     mainFn = parseMainFn(M);
     if (!mainFn)
     {
@@ -181,12 +182,6 @@ void PointerAnalysis::onthefly(Module &M)
         if (DebugMode)
             errs() << "Function worklist size (loc2): " << FunctionWorklist.size() << "\n";
 
-        // Add channel constraint to trigger channel processing
-        if (!channelSemantics.channel_operations.empty())
-        {
-            addConstraint({Channel, UINT64_MAX, UINT64_MAX});
-        }
-
         // Solve constraints and discover new callees
         solveConstraints();
         if (DebugMode)
@@ -199,7 +194,9 @@ void PointerAnalysis::onthefly(Module &M)
 static const std::set<std::string> excludedStdFuncs = {
     "memset", "bzero", "strlen", "strcmp", "sin", "cos", "sqrt", "exit", "abort", "panic"};
 
-// TODO: update accordingly
+// TODO: update accordingly.
+// NOTE: do not exclude MaybeDangling container functions, e.g., for the function which name contains "MaybeDangling",
+// do not exclude core::ptr::drop_in_place, e.g., <std::sync::mpmc::Sender<T> as core::ops::drop::Drop>::drop
 bool PointerAnalysis::excludeFunctionFromAnalysis(Function *F)
 {
     if (!F)
@@ -219,6 +216,8 @@ bool PointerAnalysis::excludeFunctionFromAnalysis(Function *F)
         name.startswith("llvm.invariant.") ||
         name.startswith("llvm.prefetch") ||
         name.startswith("llvm.objectsize.") ||
+        name.startswith("core::panicking") ||
+        name.startswith("core::hint::unreachable_unchecked") ||
         name.startswith("__asan_") ||
         name.startswith("__tsan_") ||
         name.startswith("__msan_") ||
@@ -463,6 +462,11 @@ void PointerAnalysis::visitAllocaInst(AllocaInst &AI)
 
     addConstraint({Assign, UINT64_MAX, aiNode->id}); // Points to self
 
+    if (channelSemantics->isChannelAlloc(AI))
+    {
+        channelSemantics->createChannelInfo(&AI, aiNode);
+    }
+
     // Generate AddressOf constraints for uses of this alloca
     for (const User *U : AI.users())
     {
@@ -671,17 +675,20 @@ void PointerAnalysis::visitAtomicCmpXchgInst(AtomicCmpXchgInst &ACX)
 
 void PointerAnalysis::visitInvokeInst(InvokeInst &II)
 {
+    if (excludeFunctionFromAnalysis(II.getCalledFunction()))
+    {
+        return;
+    }
+
     if (DebugMode)
         errs() << "Processing invoke: " << II << "\n";
+
+    // Handle channel operations if applicable
+    channelSemantics->handleChannelOperation(II, CurrentContext);
 
     Function *calledFn = II.getCalledFunction();
     if (calledFn) // handle direct calls
     {
-        if (excludeFunctionFromAnalysis(II.getCalledFunction()))
-        {
-            return;
-        }
-
         if (DebugMode)
             errs() << "Direct call to function: " << calledFn->getName() << "\n";
 
@@ -707,6 +714,8 @@ void PointerAnalysis::visitInvokeInst(InvokeInst &II)
                 if (!argNode || !paramNode)
                     continue; // Skip if nodes cannot be created
                 addConstraint({Assign, argNode->id, paramNode->id});
+                if (i == 0 && param->getType()->isPointerTy())
+                    argNode->unionAlias(paramNode);
             }
         }
 
@@ -744,24 +753,21 @@ void PointerAnalysis::visitInvokeInst(InvokeInst &II)
 
 void PointerAnalysis::visitCallInst(CallInst &CI)
 {
-    if (DebugMode)
-        errs() << "Processing call: " << CI << "\n";
-
-    // Handle channel operations first
-    if (handleChannelOperation(CI))
+    if (excludeFunctionFromAnalysis(CI.getCalledFunction()))
     {
         return;
     }
+
+    if (DebugMode)
+        errs() << "Processing call: " << CI << "\n";
+
+    // Handle channel operations if applicable
+    channelSemantics->handleChannelOperation(CI, CurrentContext);
 
     // Handle function calls
     Function *calledFn = CI.getCalledFunction();
     if (calledFn)
     {
-        if (excludeFunctionFromAnalysis(calledFn))
-        {
-            return;
-        }
-
         if (handleRustTry(CI, calledFn))
         {
             return; // done processing for __rust_try
@@ -789,6 +795,8 @@ void PointerAnalysis::visitCallInst(CallInst &CI)
                 if (!argNode || !paramNode)
                     continue; // Skip if nodes cannot be created
                 addConstraint({Assign, argNode->id, paramNode->id});
+                if (i == 0 && param->getType()->isPointerTy())
+                    argNode->unionAlias(paramNode);
             }
         }
 
@@ -885,12 +893,13 @@ void PointerAnalysis::handleDeclaredFunction(CallBase &CB, Function *F, CGNode r
         if (DebugMode)
             errs() << "Processing declared function: " << name << "\n";
 
+        // declare void @llvm.memcpy.*(dest, src, size, is_volatile)
         Value *arg1 = CB.getArgOperand(0); // writeonly
         Value *arg2 = CB.getArgOperand(1); // readonly
         if (arg1->getType()->isPointerTy() && arg2->getType()->isPointerTy())
         {
-            Node *srcNode = getOrCreateNode(arg1, CurrentContext);
-            Node *dstNode = getOrCreateNode(arg2, CurrentContext);
+            Node *srcNode = getOrCreateNode(arg2, CurrentContext);
+            Node *dstNode = getOrCreateNode(arg1, CurrentContext);
             if (!srcNode || !dstNode)
                 return; // Skip if nodes cannot be created
             addConstraint({Assign, srcNode->id, dstNode->id});
@@ -921,48 +930,8 @@ void PointerAnalysis::handleDeclaredFunction(CallBase &CB, Function *F, CGNode r
     }
 }
 
-bool PointerAnalysis::handleChannelOperation(CallInst &CI)
-{
-    // Check if this is a channel operation first
-    if (channelSemantics.isChannelOperation(&CI))
-    {
-        if (DebugMode)
-            errs() << "Processing channel operation: " << CI << "\n";
-
-        ChannelOperation *channelOp = channelSemantics.analyzeChannelCall(&CI, CurrentContext);
-        if (channelOp)
-        {
-            channelSemantics.channel_operations.push_back(channelOp);
-
-            if (DebugMode)
-            {
-                Function *caller = CI.getFunction(); // Get the caller function
-                errs() << "Detected channel operation: ";
-                switch (channelOp->operation)
-                {
-                case ChannelOperation::SEND:
-                    errs() << "SEND";
-                    break;
-                case ChannelOperation::RECV:
-                    errs() << "RECV";
-                    break;
-                case ChannelOperation::CHANNEL_CREATE:
-                    errs() << "CREATE";
-                    break;
-                }
-                errs() << " in function: " << caller->getName() << "\n";
-            }
-
-            return true;
-        }
-    }
-
-    return false;
-}
-
 void PointerAnalysis::visitInstruction(Instruction &I)
 {
-
     if (isa<LandingPadInst>(&I) || isa<TruncInst>(&I) || isa<ZExtInst>(&I) ||
         isa<SExtInst>(&I) || isa<FPTruncInst>(&I) || isa<FPExtInst>(&I) ||
         isa<UIToFPInst>(&I) || isa<SIToFPInst>(&I) || isa<FPToUIInst>(&I) ||
@@ -1003,12 +972,6 @@ void PointerAnalysis::addConstraint(const Constraint &constraint)
         break;
     case Store: // rhs is the base ptr
         DU[constraint.rhs_id].push_back(constraint);
-        break;
-
-    case Channel:
-        // Channel constraints do not have lhs_id or rhs_id, TODO: we need to update DU
-        if (DebugMode)
-            errs() << "Channel constraint added.\n";
         break;
 
     default:
@@ -1138,10 +1101,6 @@ void PointerAnalysis::solveConstraints()
             case Invoke:
                 processInvokeConstraints(constraint);
                 break;
-
-            case Channel:
-                handleChannelConstraints();
-                break;
             }
         }
 
@@ -1164,7 +1123,6 @@ void PointerAnalysis::processAssignConstraint(const llvm::Constraint &constraint
 
     bool changed = false;
     auto &dst = idToNodeMap[constraint.rhs_id];
-
     if (constraint.lhs_id == UINT64_MAX)
     {
         // Allocate: Points to self
@@ -1388,6 +1346,8 @@ void PointerAnalysis::processInvokeConstraints(const llvm::Constraint &constrain
                         if (!argNode || !paramNode)
                             continue; // Skip if nodes cannot be created
                         addConstraint({Assign, argNode->id, paramNode->id});
+                        if (i == 0 && param->getType()->isPointerTy())
+                            argNode->unionAlias(paramNode);
                     }
                 }
                 // Add constraints for return value
@@ -1477,26 +1437,23 @@ void PointerAnalysis::processInvokeConstraints(const llvm::Constraint &constrain
     }
 }
 
+// not used: no need to do so
+// Process channel constraints after all other constraints
 bool PointerAnalysis::handleChannelConstraints()
 {
     // Channel operations have already been collected during the main analysis
     // in visitCallInst. This function processes and applies channel constraints.
-
     if (DebugMode)
     {
         errs() << "=== Processing Channel Constraints ===\n";
-        errs() << "Found " << channelSemantics.channel_operations.size()
-               << " channel operations\n";
-        errs() << "Found " << channelSemantics.channel_map.size()
-               << " channel mappings\n";
-        errs() << "Found " << channelSemantics.channels.size()
-               << " channel instances\n";
+        errs() << "Found " << channelSemantics->channel2info.size()
+               << " channel info\n";
     }
 
     // Apply channel-specific constraints to the pointer analysis
     // This function returns whether any new constraints were added
     size_t oldWorklistSize = Worklist.size();
-    channelSemantics.applyChannelConstraints(this);
+    channelSemantics->applyChannelConstraints();
 
     bool constraintsAdded = (Worklist.size() > oldWorklistSize);
 
@@ -1513,10 +1470,45 @@ void PointerAnalysis::propagateDiff(uint64_t id)
 {
     for (const auto &c : DU[id])
     {
-        Worklist.push_back(c);
         if (DebugMode)
         {
             errs() << "\t Propagating diff for id: " << id << ", constraint: " << c << "\n";
+        }
+        Worklist.push_back(c);
+    }
+
+    auto it = idToNodeMap.find(id);
+    if (it != idToNodeMap.end())
+    {
+        Node *node = it->second;
+        // check if DU[id] has aliases, if so, propagate to aliases
+        if (node->alias)
+        {
+            // propagate to alias
+            auto aliasNode = getNodebyID(node->alias->id);
+            if (!aliasNode) // Skip if alias node not found
+                return;
+            aliasNode->diff.insert(node->diff.begin(), node->diff.end()); // propagate diff to alias
+            aliasNode->pts.insert(node->pts.begin(), node->pts.end());    // propagate pts to alias
+            for (const auto &c : DU[aliasNode->id])
+            {
+                Worklist.push_back(c);
+                if (DebugMode)
+                {
+                    errs() << "\t Propagating diff to alias id: " << aliasNode->id << ", constraint: " << c << "\n";
+                }
+            }
+        }
+
+        // check if channel dangling operations need to be matched
+        if (!channelSemantics->channel2DanglingOperations.empty())
+        {
+            if (DebugMode)
+            {
+                errs() << "Checking for channel dangling operations to match...\n";
+            }
+            // Match dangling operations with the current id
+            channelSemantics->matchDanglingOperations(node);
         }
     }
 }
@@ -1550,24 +1542,29 @@ bool PointerAnalysis::parseOutputDir(Module &M)
 
 const void PointerAnalysis::printStatistics()
 {
+    errs() << "=== Pointer Analysis Statistics ===\n";
     // PointsToMap statistics
+    // errs() << "Nodes which pts has Node id = 4119: " << "\n"; // debug purpose
     size_t numNodes = idToNodeMap.size();
     size_t numEdges = 0;
     for (const auto &entry : idToNodeMap)
     {
         numEdges += entry.second->pts.size();
+        // if (entry.second->pts.count(4119))
+        // {
+        //     errs() << "Node ID: " << entry.second->id << ", Value: " << *entry.second << "\n";
+        // }
     }
 
     // Visited functions
     size_t numVisitedFunctions = Visited.size();
 
-    errs() << "=== PointerAnalysis Statistics ===\n";
     errs() << "PointsToMap: " << numNodes << " nodes, " << numEdges << " edges\n"; // TODO: edge should be how many unique constraints we created during this process ...
     errs() << "CallGraph: " << callGraph.numNodes() << " nodes, " << callGraph.numEdges() << " edges\n";
     errs() << "Visited functions: " << numVisitedFunctions << "\n";
 
     // Print channel semantics statistics
-    channelSemantics.printChannelInfo(errs());
+    channelSemantics->printChannelInfo(errs());
 
     errs() << "==================================\n";
 }
@@ -1591,7 +1588,6 @@ void PointerAnalysis::printPointsToMap(std::ofstream &outFile) const
         }
 
         outFile << "Pointer: " << pointerStr << "\n";
-
         for (auto target_id : entry.second->pts)
         {
             std::string targetStr;

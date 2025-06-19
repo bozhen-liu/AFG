@@ -53,6 +53,9 @@ namespace llvm
     class GetElementPtrInst;
     class AllocaInst;
 
+    // Forward declare ChannelSemantics
+    class ChannelSemantics;
+
     struct Node
     {
         uint64_t id;                      // Unique node ID
@@ -63,6 +66,27 @@ namespace llvm
 
         // used during solving and propogating
         std::unordered_set<uint64_t> diff; // newly added nodes into points-to set; will be added to pts after propogation and reset for next iteration
+        Node *alias = nullptr;             // Union-find for aliasing: used when actual parameter is used as return value with GEP, store and memcpy, only happens on the 1st param e.g.,
+        // define internal void @"_ZN3std4sync4mpmc4list16Channel$LT$T$GT$3new17h9fbe3e677e1b4f13E"(ptr sret(%"std::sync::mpmc::list::Channel<i32>") %0) ...
+        //   %7 = getelementptr inbounds %"std::sync::mpmc::list::Channel<i32>", ptr %0, i32 0, i32 2, !dbg !5323
+        //   call void @llvm.memcpy.p0.p0.i64(ptr align 128 %7, ptr align 128 %_6, i64 128, i1 false), !dbg !5323
+
+        Node *findAliasRoot()
+        {
+            if (!alias)
+                return this;
+            return alias = alias->findAliasRoot();
+        }
+
+        void unionAlias(Node *other)
+        {
+            Node *root1 = this->findAliasRoot();
+            Node *root2 = other->findAliasRoot();
+            if (root1 == root2)
+                return; // Prevents cycles!
+            root2->alias = root1;
+            // Merge points-to sets as needed
+        }
 
         // Constructor
         Node(int nodeId, llvm::Value *v, Context ctx = Everywhere, std::vector<uint64_t> idx = {}) : id(nodeId), value(v), context(ctx), offsets(std::move(idx)) {}
@@ -89,6 +113,25 @@ namespace llvm
             }
             else
                 os << "null";
+            if (auto *inst = llvm::dyn_cast<llvm::Instruction>(value))
+            {
+                llvm::Function *func = inst->getParent()->getParent();
+                if (func)
+                {
+                    os << " (from function " << func->getName() << ")";
+                }
+            }
+            else if (auto *arg = llvm::dyn_cast<llvm::Argument>(value))
+            {
+                if (auto *func = arg->getParent())
+                {
+                    os << " (arg of function " << func->getName() << ")";
+                }
+            }
+            else
+            {
+                os << " (no function context)";
+            }
             os << ", context=";
             os << "[";
             if (context == Everywhere)
@@ -165,7 +208,6 @@ namespace llvm
         Load,
         Store,
         Invoke, // dynamic dispatch
-        Channel // used when considering channel ops
     };
 
     struct Constraint // use UINT64_MAX for null
@@ -207,9 +249,6 @@ namespace llvm
                 break;
             case Invoke:
                 typeStr = "Invoke";
-                break;
-            case Channel:
-                typeStr = "Channel";
                 break;
             default:
                 typeStr = "Unknown";
@@ -317,7 +356,8 @@ namespace llvm
         bool handleRustTry(CallBase &CB, Function *F);                                          // handle __rust_try
         void handleDeclaredFunction(CallBase &CI, Function *F, CGNode realCaller = NullCGNode); // Handle certain declared functions: call invoked through vtable needs realCaller
 
-        ChannelSemantics channelSemantics; // Channel semantics integration
+        ChannelSemantics *channelSemantics; // Channel semantics integration
+        void setChannelSemantics(ChannelSemantics *cs) { channelSemantics = cs; }
 
     protected:
         uint64_t nextNodeId = 0; // Monotonically increasing node ID
@@ -357,7 +397,6 @@ namespace llvm
         void onthefly(Module &M);               // On-the-fly analysis
 
         // Channel-specific analysis methods
-        bool handleChannelOperation(CallInst &CI);
         bool handleChannelConstraints();
     };
 

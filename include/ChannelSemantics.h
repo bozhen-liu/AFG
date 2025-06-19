@@ -5,6 +5,7 @@
 #include "llvm/IR/Instructions.h"
 #include "llvm/Support/raw_ostream.h"
 #include "CallGraph.h"
+#include "PointerAnalysis.h"
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
@@ -12,91 +13,118 @@
 
 namespace llvm
 {
+    // Forward declare PointerAnalysis and Node to avoid circular dependencies
+    class PointerAnalysis;
+    struct Node;
 
-    // Represents a complete channel instance including creation and both endpoints
-    struct ChannelInfo
+    enum ChannelOpType
     {
-        llvm::Value *channel_id;          // Unique identifier for the channel (creation call)
-        llvm::Value *sender_value;        // The sender endpoint value
-        llvm::Value *receiver_value;      // The receiver endpoint value
-        llvm::Type *data_type;            // Type of data being transmitted
-        llvm::Instruction *creation_call; // The channel creation instruction
-        Context context;                  // Context for context-sensitive analysis
-
-        ChannelInfo(llvm::Value *channel, llvm::Value *sender, llvm::Value *receiver,
-                    llvm::Type *dtype, llvm::Instruction *create_call, Context ctx = Everywhere)
-            : channel_id(channel), sender_value(sender), receiver_value(receiver),
-              data_type(dtype), creation_call(create_call), context(ctx) {}
-
-        bool operator==(const ChannelInfo &other) const
-        {
-            return channel_id == other.channel_id && sender_value == other.sender_value &&
-                   receiver_value == other.receiver_value && context == other.context;
-        }
+        CHANNEL_CREATE,
+        CHANNEL_SEND,
+        CHANNEL_RECV,
+        INVALID // Represents an unrecognized channel operation
     };
 
     // Represents a channel operation (send/recv/creation)
     struct ChannelOperation
     {
-        enum ChannelOpType
-        {
-            SEND,
-            RECV,
-            CHANNEL_CREATE
-        };
-
         ChannelOpType operation;
-        llvm::Instruction *instruction; // The call instruction
-        ChannelInfo *channel_info;      // Associated channel instance
-        llvm::Value *data_value;        // Data being sent/received (null for recv)
+        llvm::CallBase *sender_value;   // The sender call
+        llvm::CallBase *receiver_value; // The receiver call
+        llvm::Node *sender_node;        // Node for sender endpoint, the pointer node to locate channel in pointer analysis
+        llvm::Node *receiver_node;      // Node for receiver endpoint, the pointer node to locate channel in pointer analysis
 
-        ChannelOperation(ChannelOpType op, llvm::Instruction *inst, ChannelInfo *channel,
-                         llvm::Value *data = nullptr)
-            : operation(op), instruction(inst), channel_info(channel),
-              data_value(data) {}
+        llvm::Type *data_type; // Type of data being transmitted, together with sender_value and receiver_value
+        llvm::Node *data_node; // Node representing the data type in pointer analysis
+
+        ChannelOperation(ChannelOpType op, llvm::CallBase *sender, llvm::CallBase *receiver,
+                         llvm::Node *sender_node, llvm::Node *receiver_node, llvm::Node *data_node)
+            : operation(op), sender_value(sender), receiver_value(receiver), sender_node(sender_node), receiver_node(receiver_node), data_node(data_node) {}
+
+        bool operator==(const ChannelOperation &other) const
+        {
+            return operation == other.operation &&
+                   sender_value == other.sender_value &&
+                   receiver_value == other.receiver_value &&
+                   sender_node == other.sender_node &&
+                   receiver_node == other.receiver_node &&
+                   data_node == other.data_node;
+        }
+
+        void print(llvm::raw_ostream &os) const;
+
+        bool isSend() const
+        {
+            return operation == CHANNEL_SEND;
+        }
+
+        bool isRecv() const
+        {
+            return operation == CHANNEL_RECV;
+        }
+    };
+
+    // Represents a complete channel instance including creation and both endpoints
+    // TODO: multi receivers or senders, ROCs
+    struct ChannelInfo
+    {
+        llvm::AllocaInst *creation_call; // The channel creation instruction,
+        // e.g., we use %_4 = alloca %"std::sync::mpmc::list::Channel<i32>", align 128 from std::sync::mpsc::channel
+        // %_6 = alloca %"std::sync::mpmc::zero::Channel<i32>", align 8 from std::sync::mpmc::sync_channel
+        //      where %"std::sync::mpmc::list::Channel<i32>" = type { %"core::marker::PhantomData<i32>", %"std::sync::mpmc::utils::CachePadded<std::sync::mpmc::list::Position<i32>>", %"std::sync::mpmc::utils::CachePadded<std::sync::mpmc::list::Position<i32>>", %"std::sync::mpmc::waker::SyncWaker", [8 x i64] }
+        llvm::Node *channel;       // Node representing the channel in pointer analysis
+        ChannelOperation *send_op; // Send operation details
+        ChannelOperation *recv_op; // Receive operation details
+
+        llvm::Node *channelPtr; // Node representing the channel in pointer analysis
+        ChannelInfo(llvm::AllocaInst *creation, llvm::Node *channel)
+            : creation_call(creation), channel(channel), send_op(nullptr), recv_op(nullptr) {}
+
+        bool operator==(const ChannelInfo &other) const
+        { // Compare creation call and channel node, should be enough
+            return creation_call == other.creation_call &&
+                   channel == other.channel;
+        }
+
+        void print(llvm::raw_ostream &os) const;
     };
 
     // Channel semantics analyzer
     class ChannelSemantics
     {
     public:
+        ChannelSemantics(PointerAnalysis *analysis = nullptr)
+            : analysis(analysis) {}
+
         // Maps to track channel relationships
-        std::unordered_map<llvm::Value *, ChannelInfo *> channel_map; // Maps values to their channel info
-        std::vector<ChannelInfo *> channels;                          // All channel instances
-        std::vector<ChannelOperation *> channel_operations;
+        std::unordered_map<llvm::Node *, ChannelInfo *> channel2info; // Maps sender/receiver objects to channel info
+        std::unordered_map<llvm::Node *, ChannelOperation *> channel2DanglingOperations; // base node to unmatched operations, e.g., send/recv without info
 
-        // Identify if a value is part of a channel
-        bool isChannelValue(llvm::Value *value);
+        bool isChannelAlloc(llvm::AllocaInst &AI);
+        ChannelInfo *createChannelInfo(llvm::AllocaInst *channel_create, llvm::Node *channel_alloc);
+        void handleChannelOperation(llvm::CallBase &call, Context context = Everywhere);
+        void handleChannelSend(llvm::CallBase &call, Context context = Everywhere);
+        void handleChannelRecv(llvm::CallBase &call, Context context = Everywhere);
 
-        // Identify if a call is a channel operation
-        bool isChannelOperation(llvm::CallInst *call);
-
-        // Extract channel semantics from a call instruction
-        ChannelOperation *analyzeChannelCall(llvm::CallInst *call, Context context = Everywhere);
-
-        // Create channel info from channel creation
-        ChannelInfo *createChannelInfo(llvm::CallInst *channel_create, Context context = Everywhere);
-
-        // Get the channel info for a given value
-        ChannelInfo *getChannelInfo(llvm::Value *value);
-
-        // Find channel info by tracing back from a value (e.g., extractvalue instruction)
-        ChannelInfo *findChannelInfoForValue(llvm::Value *value);
+        bool matchOperation(llvm::Node *channel_node, ChannelOperation *op);
+        void matchDanglingOperations(llvm::Node *channel_node);
 
         // Apply channel-specific constraints to pointer analysis
-        void applyChannelConstraints(class PointerAnalysis *analysis);
+        bool applyChannelConstraints();
 
         // Debug printing
         void printChannelInfo(llvm::raw_ostream &os);
 
     private:
-        // Helper functions to identify channel types and operations
-        bool isChannelCreateCall(llvm::CallInst *call);
-        bool isSendCall(llvm::CallInst *call);
-        bool isRecvCall(llvm::CallInst *call);
+        PointerAnalysis *analysis = nullptr;                                             // Pointer analysis instance for this semantics
 
-        // Extract channel information from function names
-        std::string extractChannelType(llvm::Function *func);
+        // Helper functions to identify channel types and operations
+        bool isChannelCreateCall(std::string demangledName);
+        bool isSendCall(std::string demangledName);
+        bool isRecvCall(std::string demangledName);
+
+        // to get the channel node from the call to send/recv
+        llvm::Node *getChannelNode(llvm::Value *value, Context context = Everywhere);
     };
 
 } // namespace llvm
