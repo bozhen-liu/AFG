@@ -9,17 +9,17 @@
 
 using namespace llvm;
 
-// not used
+// not used for now
+// these functions' callsite will be used to distinguish channel objects later
 bool ChannelSemantics::isChannelCreateCall(std::string demangledName)
 {
-    // // Check for exact mpsc channel creation functions
-    // return (demangledName == "std::sync::mpsc::channel" ||
-    //         demangledName == "std::sync::mpsc::sync_channel" ||
-    //         demangledName == "tokio::sync::mpsc::channel" ||
-    //         demangledName == "tokio::sync::mpsc::unbounded_channel" ||
-    //         // Also check for test/mock versions without full std path
-    //         demangledName == "mpsc::channel");
-    return demangledName == "std::sync::mpmc::channel";
+    // Check for exact mpsc channel creation functions
+    return (demangledName == "std::sync::mpsc::channel" ||
+            demangledName == "std::sync::mpsc::sync_channel" ||
+            demangledName == "tokio::sync::mpsc::channel" ||
+            demangledName == "tokio::sync::mpsc::unbounded_channel" ||
+            // Also check for test/mock versions without full std path
+            demangledName == "mpsc::channel");
 }
 
 bool ChannelSemantics::isSendCall(std::string demangledName)
@@ -77,6 +77,7 @@ ChannelInfo *ChannelSemantics::createChannelInfo(llvm::AllocaInst *channel_creat
     {
         if (analysis->DebugMode)
             errs() << "Channel already exists for: " << channel_alloc << "\n";
+
         // Channel already exists, return the existing info
         return it->second;
     }
@@ -86,9 +87,11 @@ ChannelInfo *ChannelSemantics::createChannelInfo(llvm::AllocaInst *channel_creat
     channel2info[channel_alloc] = channel_info;
 
     if (analysis->DebugMode)
+    {
         errs() << "Creating new channel info for: " << channel_alloc->id << "\n";
-    channel_info->print(errs());
-    errs() << "\n";
+        channel_info->print(errs());
+        errs() << "\n";
+    }
 
     return channel_info;
 }
@@ -109,6 +112,12 @@ void ChannelSemantics::handleChannelOperation(llvm::CallBase &call, Context cont
     {
         // Handle channel receive operation
         handleChannelRecv(call, context);
+    }
+    else if (isChannelCreateCall(demangledName))
+    {
+        // use this as the context to distinguish channel objects
+        if (analysis->DebugMode)
+            errs() << "Detected channel creation call: " << call << "\n";
     }
 }
 
@@ -173,6 +182,7 @@ void ChannelSemantics::handleChannelSend(llvm::CallBase &call, Context context)
         {
             errs() << "No channel pointer GEP found for sender: " << *sender << "\n";
         }
+        return;
     }
 
     Node *data_node = analysis->getOrCreateNode(data, context);
@@ -211,6 +221,7 @@ void ChannelSemantics::handleChannelRecv(llvm::CallBase &call, Context context)
         {
             errs() << "No channel pointer GEP found for receiver: " << *receiver << "\n";
         }
+        return;
     }
 
     ChannelOperation *recv = new ChannelOperation(CHANNEL_RECV, nullptr, &call, nullptr, channel_node, nullptr);
@@ -232,7 +243,10 @@ bool ChannelSemantics::matchOperation(llvm::Node *channel_node, ChannelOperation
     for (auto &pair : channel2info)
     {
         llvm::Node *channel = pair.first;
-        errs() << "Checking channel: " << channel->id << " against " << *channel_node << "\n";
+
+        if (DebugMode)
+            errs() << "Checking channel: " << channel->id << " against " << *channel_node << "\n";
+
         if (channel_node->pts.count(channel->id) > 0)
         {
             // If the op node's points-to set contains this channel, add the op operation
@@ -274,6 +288,11 @@ bool ChannelSemantics::matchOperation(llvm::Node *channel_node, ChannelOperation
                     errs() << "Warning: Multiple recv operations detected for channel: " << channel->id << "\n";
                 }
             }
+        }
+        else
+        {
+            if (analysis->DebugMode)
+                errs() << "\t Channel node " << channel_node->id << " does not match channel " << channel->id << "\n";
         }
     }
     return false; // No matching channel info found for the operation
@@ -338,13 +357,31 @@ void ChannelSemantics::printChannelInfo(llvm::raw_ostream &os)
 
     // Print channel semantics analysis summary
     os << "=== Channel Semantics Analysis ===\n";
-    os << "Channel Info (" << channel2info.size() << "):\n";
+    os << "# = " << channel2info.size() << "\n";
     for (auto &pair : channel2info)
     {
         ChannelInfo *channel = pair.second;
         channel->print(os);
     }
     os << "\n";
+
+    // Print dangling operations
+    if (channel2DanglingOperations.empty())
+    {
+        os << "=== No dangling operations found ===\n";
+    }
+    else
+    {
+        os << "=== Dangling Operations ===\n # =" << channel2DanglingOperations.size() << "\n";
+        for (auto &pair : channel2DanglingOperations)
+        {
+            llvm::Node *channel_node = pair.first;
+            os << "Channel Node: " << channel_node->id << "\n";
+            ChannelOperation *op = pair.second;
+            os << "\tDangling Operation: \n\t";
+            op->print(os);
+        }
+    }
 }
 
 void llvm::ChannelOperation::print(llvm::raw_ostream &os) const

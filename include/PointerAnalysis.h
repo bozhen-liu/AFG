@@ -377,6 +377,7 @@ namespace llvm
         void AddToFunctionWorklist(CGNode *callee);
         virtual void processGlobalVar(GlobalVariable &GV);
         void visitFunction(CGNode *cgnode);
+        bool useParamAsReturnValue(Argument *param); // Check if the first parameter is used as a return value
 
         // used to track the current context and CGNode during analysis
         CGNode *CurrentCGNode = nullptr;

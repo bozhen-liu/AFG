@@ -714,7 +714,7 @@ void PointerAnalysis::visitInvokeInst(InvokeInst &II)
                 if (!argNode || !paramNode)
                     continue; // Skip if nodes cannot be created
                 addConstraint({Assign, argNode->id, paramNode->id});
-                if (i == 0 && param->getType()->isPointerTy())
+                if (i == 0 && useParamAsReturnValue(param))
                     argNode->unionAlias(paramNode);
             }
         }
@@ -795,7 +795,7 @@ void PointerAnalysis::visitCallInst(CallInst &CI)
                 if (!argNode || !paramNode)
                     continue; // Skip if nodes cannot be created
                 addConstraint({Assign, argNode->id, paramNode->id});
-                if (i == 0 && param->getType()->isPointerTy())
+                if (i == 0 && useParamAsReturnValue(param))
                     argNode->unionAlias(paramNode);
             }
         }
@@ -829,6 +829,55 @@ void PointerAnalysis::visitCallInst(CallInst &CI)
         if (DebugMode)
             errs() << "TODO: CallInst is InlineAsm: " << CI << "\n";
     }
+}
+
+// see llvm::Node::alias for detail
+bool PointerAnalysis::useParamAsReturnValue(Argument *param)
+{
+    if (!param->getType()->isPointerTy() ||               // Only check pointer parameters
+        !param->getParent()->getReturnType()->isVoidTy()) // If the function has no return value, the parameter might be used as a return value
+        return false;
+
+    if (param->hasStructRetAttr())
+        return true; // If the parameter has a struct return attribute, it is used as a return value
+
+    // Check if the parameter is used as a return value in the function
+    for (const User *U : param->users())
+    {
+        if (const GetElementPtrInst *GEP = dyn_cast<GetElementPtrInst>(U))
+        {
+            for (const User *gepUser : GEP->users())
+            {
+                if (isa<StoreInst>(gepUser) || isa<GetElementPtrInst>(gepUser) || isa<LoadInst>(gepUser))
+                {
+                    if (DebugMode)
+                        errs() << "Parameter " << *param << " is used as a return value in function " << param->getParent()->getName() << "\n";
+                    return true; // The parameter is used as a return value
+                }
+                else if (const CallBase *call = dyn_cast<CallBase>(gepUser))
+                {
+                    // Check if the call is to a function is llvm.memcpy.p0.p0.i64
+                    Function *calledFunc = call->getCalledFunction();
+                    if (calledFunc && calledFunc->getName() == "llvm.memcpy.p0.p0.i64")
+                    {
+                        if (DebugMode)
+                            errs() << "Parameter " << *param << " is used as a return value (memcpy) in function " << param->getParent()->getName() << "\n";
+                        return true; // The parameter is used in a memcpy call
+                    }
+                }
+            }
+        }
+        else if (const CallBase *call = dyn_cast<CallBase>(U))
+        { // to be conservative, we assume that the parameter might be used as a return value, since it might be passed to the callee and received updates there
+            if (DebugMode)
+                errs() << "Parameter " << *param << " might be used as a return value in function " << param->getParent()->getName() << "\n";
+            return true; // The parameter is used as a return value
+        }
+    }
+
+    if (DebugMode)
+        errs() << "Parameter " << *param << " is not used as a return value in function " << param->getParent()->getName() << "\n";
+    return false; // Not used as a return value
 }
 
 // handle __rust_try:
@@ -1346,7 +1395,7 @@ void PointerAnalysis::processInvokeConstraints(const llvm::Constraint &constrain
                         if (!argNode || !paramNode)
                             continue; // Skip if nodes cannot be created
                         addConstraint({Assign, argNode->id, paramNode->id});
-                        if (i == 0 && param->getType()->isPointerTy())
+                        if (i == 0 && useParamAsReturnValue(param))
                             argNode->unionAlias(paramNode);
                     }
                 }
