@@ -81,7 +81,7 @@ namespace
                 errs() << "Error: Could not open file for writing results.\n";
             }
 
-            errs() << "=== Pointer analysis time ===\n"
+            errs() << "=== Pointer Analysis Time ===\n"
                    << elapsed.count() << " seconds\n";
 
             PA->printStatistics(); // Print statistics to stderr

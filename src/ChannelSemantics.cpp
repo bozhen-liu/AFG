@@ -351,7 +351,7 @@ void ChannelSemantics::printChannelInfo(llvm::raw_ostream &os)
 {
     if (channel2info.empty())
     {
-        os << "=== No channel found ===\n";
+        os << "=== No Channel Found ===\n";
         return;
     }
 

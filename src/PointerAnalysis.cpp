@@ -1739,6 +1739,17 @@ const void PointerAnalysis::printStatistics()
     errs() << "CallGraph: " << callGraph.numNodes() << " nodes, " << callGraph.numEdges() << " edges\n";
     errs() << "Visited functions: " << numVisitedFunctions << "\n";
 
+    if (TaintingEnabled)
+    {
+        errs() << "=== Taint Analysis Statistics ===\n";
+        errs() << "Tainted function signatures: " << TaintedFnSignatures.size() << "\n";
+        errs() << "Tainted nodes: " << TaintedNodeIDs.size() << "\n";
+    }
+    else
+    {
+        errs() << "=== Tainting Is Disabled ===\n";
+    }
+
     // Print channel semantics statistics
     channelSemantics->printChannelInfo(errs());
 
@@ -1796,7 +1807,12 @@ void PointerAnalysis::printTaintedNodes(std::ofstream &outFile)
             continue;
         }
         // i dont want to print the pts of each node, but the remaining information
-        outFile << "\tNode ID=" << node->id << ", Value=" << node->value << "\n";
+        outFile << "\tNode ID=" << node->id << ", Value=";
+        std::string s;
+        llvm::raw_string_ostream rso(s);
+        rso << *node->value;
+        rso.flush();
+        outFile << s << "\n";
 
         // // the following prints out the full information of the node
         // std::string s;
