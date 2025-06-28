@@ -23,6 +23,10 @@ void PointerAnalysis::analyze(Module &M)
         return;
     }
 
+    // Parse the taint configuration file to get tagged strings and tainted objects if exists
+    if (parseTaintConfig(M))
+        TaintingEnabled = true;
+
     channelSemantics = new ChannelSemantics(this); // Initialize channel semantics
     mainFn = parseMainFn(M);
     if (!mainFn)
@@ -455,7 +459,6 @@ void PointerAnalysis::visitAllocaInst(AllocaInst &AI)
     if (DebugMode)
         errs() << "Processing alloca: " << AI << "\n";
 
-    // Handle non-tagged allocas
     Node *aiNode = getOrCreateNode(&AI, getContext());
     if (!aiNode)
         return;
@@ -702,32 +705,7 @@ void PointerAnalysis::visitInvokeInst(InvokeInst &II)
             return; // Skip declarations
         }
 
-        // Add constraints for parameter passing
-        for (unsigned i = 0; i < II.arg_size(); ++i)
-        {
-            Value *arg = II.getArgOperand(i);
-            if (arg->getType()->isPointerTy())
-            {
-                Node *argNode = getOrCreateNode(arg, CurrentContext);
-                Argument *param = calledFn->getArg(i);
-                Node *paramNode = getOrCreateNode(param, CurrentContext);
-                if (!argNode || !paramNode)
-                    continue; // Skip if nodes cannot be created
-                addConstraint({Assign, argNode->id, paramNode->id});
-                if (i == 0 && useParamAsReturnValue(param))
-                    argNode->unionAlias(paramNode);
-            }
-        }
-
-        // Add constraints for return value
-        if (calledFn->getReturnType()->isPointerTy())
-        {
-            Node *calledFnNode = getOrCreateNode(calledFn, CurrentContext);
-            Node *returnNode = getOrCreateNode(&II, CurrentContext);
-            if (!calledFnNode || !returnNode)
-                return; // Skip if nodes cannot be created
-            addConstraint({Assign, calledFnNode->id, returnNode->id});
-        }
+        addConstraintForCall(II, calledFn);
 
         // Visit the callee
         AddToFunctionWorklist(&callee);
@@ -783,32 +761,7 @@ void PointerAnalysis::visitCallInst(CallInst &CI)
             return; // done processing for declarations
         }
 
-        // Add constraints for parameter passing
-        for (unsigned i = 0; i < CI.arg_size(); ++i)
-        {
-            Value *arg = CI.getArgOperand(i);
-            if (arg->getType()->isPointerTy())
-            {
-                Node *argNode = getOrCreateNode(arg, CurrentContext);
-                Argument *param = calledFn->getArg(i);
-                Node *paramNode = getOrCreateNode(param, CurrentContext);
-                if (!argNode || !paramNode)
-                    continue; // Skip if nodes cannot be created
-                addConstraint({Assign, argNode->id, paramNode->id});
-                if (i == 0 && useParamAsReturnValue(param))
-                    argNode->unionAlias(paramNode);
-            }
-        }
-
-        // Add constraints for return value
-        if (calledFn->getReturnType()->isPointerTy())
-        {
-            Node *calledFnNode = getOrCreateNode(calledFn, CurrentContext);
-            Node *returnNode = getOrCreateNode(&CI, CurrentContext);
-            if (!calledFnNode || !returnNode)
-                return; // Skip if nodes cannot be created
-            addConstraint({Assign, calledFnNode->id, returnNode->id});
-        }
+        addConstraintForCall(CI, calledFn);
 
         // Visit the callee
         AddToFunctionWorklist(&callee);
@@ -831,6 +784,59 @@ void PointerAnalysis::visitCallInst(CallInst &CI)
     }
 }
 
+void PointerAnalysis::addConstraintForCall(CallBase &CB, Function *callee)
+{
+    bool taint = (TaintingEnabled && isTaintedFunction(CB));
+
+    // Add constraints for parameter passing
+    for (unsigned i = 0; i < CB.arg_size(); ++i)
+    {
+        Value *arg = CB.getArgOperand(i);
+        if (arg->getType()->isPointerTy())
+        {
+            Node *argNode = getOrCreateNode(arg, CurrentContext);
+            Argument *param = callee->getArg(i);
+            Node *paramNode = getOrCreateNode(param, CurrentContext);
+            if (!argNode || !paramNode)
+                continue; // Skip if nodes cannot be created
+            addConstraint({Assign, argNode->id, paramNode->id});
+            if (i == 0 && useParamAsReturnValue(param))
+                argNode->unionAlias(paramNode);
+
+            // find taint source from parameters
+            if (taint && !param->hasStructRetAttr())
+            {
+                // if (DebugMode)
+                errs() << "Found Taint Source (parameter): " << *paramNode << "\n";
+
+                TaintedNodeIDs.insert(paramNode->id); // Mark parameter as tainted
+
+                llvm::errs() << "-> Tainting node " << argNode->id << " from " << paramNode->id << "\n";
+                TaintedNodeIDs.insert(argNode->id); // Mark argument as tainted
+            }
+        }
+    }
+
+    // Add constraints for return value
+    if (callee->getReturnType()->isPointerTy())
+    {
+        Node *calleeNode = getOrCreateNode(callee, CurrentContext);
+        Node *returnNode = getOrCreateNode(&CB, CurrentContext);
+        if (!calleeNode || !returnNode)
+            return; // Skip if nodes cannot be created
+        addConstraint({Assign, calleeNode->id, returnNode->id});
+
+        if (taint)
+        {
+            // If the function is tainted, mark the return value as tainted
+            if (DebugMode)
+                errs() << "Found Taint Source (return value): " << *returnNode << "\n";
+
+            TaintedNodeIDs.insert(returnNode->id); // Mark return value as tainted
+        }
+    }
+}
+
 // see llvm::Node::alias for detail
 bool PointerAnalysis::useParamAsReturnValue(Argument *param)
 {
@@ -839,7 +845,7 @@ bool PointerAnalysis::useParamAsReturnValue(Argument *param)
         return false;
 
     if (param->hasStructRetAttr())
-        return true; // If the parameter has a struct return attribute, it is used as a return value
+        return true; // If the parameter has a struct return attribute, it is used as a return value, e.g., sret
 
     // Check if the parameter is used as a return value in the function
     for (const User *U : param->users())
@@ -1217,6 +1223,14 @@ void PointerAnalysis::processAssignConstraint(const llvm::Constraint &constraint
         dst->pts.insert(dst->diff.begin(), dst->diff.end()); // Ensure pts contains all diff ids
         propagateDiff(constraint.rhs_id);
     }
+
+    if (TaintingEnabled && TaintedNodeIDs.count(constraint.lhs_id))
+    { // If the source node is tainted, mark the destination node as tainted
+        if (DebugMode)
+            llvm::errs() << "-> Tainting node " << constraint.rhs_id << " from assign " << constraint.lhs_id << "\n";
+
+        TaintedNodeIDs.insert(constraint.rhs_id);
+    }
 }
 
 // dst points to src (address-of)
@@ -1245,9 +1259,16 @@ void PointerAnalysis::processAddressOfConstraint(const llvm::Constraint &constra
         dst->pts.insert(dst->diff.begin(), dst->diff.end()); // Ensure pts contains all diff ids
         propagateDiff(constraint.rhs_id);
     }
+
+    if (TaintingEnabled && TaintedNodeIDs.count(constraint.lhs_id))
+    { // If the source node is tainted, mark the destination node as tainted
+        if (DebugMode)
+            llvm::errs() << "-> Tainting node " << constraint.rhs_id << " from address of " << constraint.lhs_id << "\n";
+
+        TaintedNodeIDs.insert(constraint.rhs_id);
+    }
 }
 
-// use Offset
 void PointerAnalysis::processGEPConstraint(const llvm::Constraint &constraint)
 {
     if (DebugMode)
@@ -1271,6 +1292,16 @@ void PointerAnalysis::processGEPConstraint(const llvm::Constraint &constraint)
         if (!fieldPtrNode)
             continue;
         addConstraint({Assign, fieldPtrNode->id, dst->id});
+
+        // --- Taint propagation: if base pointer is tainted, taint the GEP result ---
+        if (TaintingEnabled && TaintedNodeIDs.count(src->id))
+        {
+            if (DebugMode)
+                errs() << "-> Tainting node " << dst->id << " and " << fieldPtrNode->id << " from GEP base " << src->id << "\n";
+
+            TaintedNodeIDs.insert(dst->id);
+            TaintedNodeIDs.insert(fieldPtrNode->id); // Also taint the field pointer node
+        }
     }
 }
 
@@ -1297,6 +1328,15 @@ void PointerAnalysis::processLoadConstraint(const llvm::Constraint &constraint)
         if (!fieldPtrNode)
             continue; // Skip if node cannot be created
         addConstraint({Assign, fieldPtrNode->id, dst->id});
+
+        // --- Taint propagation: if the field is tainted, taint the load result ---
+        if (TaintingEnabled && TaintedNodeIDs.count(fieldPtrNode->id))
+        {
+            if (DebugMode)
+                llvm::errs() << "-> Tainting node " << dst->id << " from field " << fieldPtrNode->id << "\n";
+
+            TaintedNodeIDs.insert(dst->id);
+        }
     }
 }
 
@@ -1315,13 +1355,20 @@ void PointerAnalysis::processStoreConstraint(const llvm::Constraint &constraint)
     {
         Node *objNode = getNodebyID(obj_id);
         if (!objNode)
-        {
             continue; // Skip if target not found
-        }
         Node *fieldPtrNode = getOrCreateNode(objNode->value, objNode->context, constraint.offsets);
         if (!fieldPtrNode)
             continue; // Skip if node cannot be created
         addConstraint({Assign, src->id, fieldPtrNode->id});
+
+        // --- Taint propagation: If the source node is tainted, mark the destination node as tainted ---
+        if (TaintingEnabled && TaintedNodeIDs.count(src->id))
+        {
+            if (DebugMode)
+                llvm::errs() << "-> Tainting node " << fieldPtrNode->id << " from " << src->id << "\n";
+
+            TaintedNodeIDs.insert(fieldPtrNode->id);
+        }
     }
 }
 
@@ -1383,32 +1430,8 @@ void PointerAnalysis::processInvokeConstraints(const llvm::Constraint &constrain
 
             // Add constraints for parameter passing
             if (CallBase *CB = dyn_cast<CallBase>(callNode->value))
-            {
-                for (unsigned i = 0; i < CB->arg_size(); ++i)
-                {
-                    Value *arg = CB->getArgOperand(i);
-                    if (arg->getType()->isPointerTy())
-                    {
-                        Node *argNode = getOrCreateNode(arg, ctx);
-                        Argument *param = indirectFn->getArg(i);
-                        Node *paramNode = getOrCreateNode(param, ctx);
-                        if (!argNode || !paramNode)
-                            continue; // Skip if nodes cannot be created
-                        addConstraint({Assign, argNode->id, paramNode->id});
-                        if (i == 0 && useParamAsReturnValue(param))
-                            argNode->unionAlias(paramNode);
-                    }
-                }
-                // Add constraints for return value
-                if (indirectFn->getReturnType()->isPointerTy())
-                {
-                    Node *indirectFnNode = getOrCreateNode(indirectFn, ctx);
-                    Node *returnNode = getOrCreateNode(callNode->value, ctx);
-                    if (!indirectFnNode || !returnNode)
-                        continue; // Skip if nodes cannot be created
-                    addConstraint({Assign, indirectFnNode->id, returnNode->id});
-                }
-            }
+                addConstraintForCall(*CB, indirectFn);
+
             AddToFunctionWorklist(&callee);
         }
         // Case 2: Vtable from GlobalVariable (Rust trait object)
@@ -1562,6 +1585,42 @@ void PointerAnalysis::propagateDiff(uint64_t id)
     }
 }
 
+bool PointerAnalysis::isTaintedFunction(const CallBase &callsite)
+{
+    if (const Function *callee = callsite.getCalledFunction())
+    {
+        std::string demangledName = getDemangledName(callee->getName().str());
+
+        if (DebugMode)
+        {
+            errs() << "Checking if function is tainted: " << demangledName << "\n"
+                   << *callee->getReturnType() << "\n"
+                   << callee->getParent()->getName().str() << "\n"; // file path
+            // print out parameter types
+            for (const auto &arg : callee->args())
+            {
+                errs() << "  - " << *arg.getType() << "\n";
+            }
+        }
+
+        // Check if the function matches any tainted function signature
+        for (const auto &signature : TaintedFnSignatures)
+        {
+            if (signature->fn_name == demangledName &&
+                ((signature->returnType == "void" && callee->getReturnType()->isVoidTy()) ||
+                 (signature->returnType == getTypeAsString(callee->getReturnType()))) &&
+                signature->args.size() <= callee->arg_size())
+            {
+                // if (DebugMode)
+                errs() << "Found tainted function: " << demangledName << "\n";
+                return true;
+            }
+        }
+    }
+
+    return false;
+}
+
 bool PointerAnalysis::parseInputDir(Module &M)
 {
     // get the input file path
@@ -1585,6 +1644,74 @@ bool PointerAnalysis::parseOutputDir(Module &M)
     llvm::sys::path::append(outputPath, "output.txt");
     outputFile = std::string(outputPath.c_str());
     errs() << "Output file path: " << outputFile << "\n";
+
+    return true;
+}
+
+// parse the json file to get function signatures and stored at TaintedFnSignatures
+bool PointerAnalysis::parseTaintConfig(Module &M)
+{
+    if (inputDir.empty())
+    {
+        parseInputDir(M); // Ensure inputDir is set
+    }
+
+    // Construct taint_config.json path
+    llvm::SmallString<256> taintConfigPath(inputDir);
+    llvm::sys::path::append(taintConfigPath, "taint_config.json");
+    taintJsonFile = std::string(taintConfigPath.c_str());
+    errs() << "Taint config file path: " << taintJsonFile << "\n";
+
+    // Check if the taint config file exists
+    if (llvm::sys::fs::exists(taintJsonFile))
+    {
+        if (DebugMode)
+            errs() << "Taint config file exists. Continuing with analysis...\n";
+    }
+    else
+    {
+        errs() << "Taint config file does NOT exist at " << taintJsonFile << "\n Continue without taint analysis ...\n";
+        return false;
+    }
+
+    // Load the taint configuration from taint_config.json
+    std::ifstream configFile(taintJsonFile);
+    if (configFile.is_open())
+    {
+        json config;
+        configFile >> config;
+
+        // Parse the "taint" array
+        for (const auto &obj : config["taint"])
+        {
+            std::string fn_name = obj["fn_name"].get<std::string>();
+            std::string return_type = obj["return_type"].get<std::string>();
+            std::vector<std::string> parameter_type = obj["parameter_type"].get<std::vector<std::string>>();
+
+            // Create a new function signature and add it to the set
+            FnSignature *signature = new FnSignature{fn_name, parameter_type, return_type};
+            TaintedFnSignatures.insert(signature);
+        }
+    }
+    else
+    {
+        errs() << "Warning: Could not open taint_config.json.\n";
+        return false;
+    }
+
+    // if (DebugMode)
+    {
+        errs() << "Parsed TaintedFnSignatures contents:\n";
+        for (const auto &sig : TaintedFnSignatures)
+        {
+            errs() << "  - " << sig->returnType << " " << sig->fn_name << "(";
+            for (const auto &arg : sig->args)
+            {
+                errs() << arg << ", ";
+            }
+            errs() << ")" << "\n";
+        }
+    }
 
     return true;
 }
@@ -1654,5 +1781,28 @@ void PointerAnalysis::printPointsToMap(std::ofstream &outFile) const
             }
             targetStream.flush();
         }
+    }
+}
+
+void PointerAnalysis::printTaintedNodes(std::ofstream &outFile)
+{
+    outFile << "\n\n\n\nTainted Nodes (# = " << TaintedNodeIDs.size() << "/" << idToNodeMap.size() << "):\n";
+    for (auto id : TaintedNodeIDs)
+    {
+        Node *node = getNodebyID(id);
+        if (!node)
+        {
+            outFile << "\tNode ID: " << id << " (not found)\n";
+            continue;
+        }
+        // i dont want to print the pts of each node, but the remaining information
+        outFile << "\tNode ID=" << node->id << ", Value=" << node->value << "\n";
+
+        // // the following prints out the full information of the node
+        // std::string s;
+        // llvm::raw_string_ostream rso(s);
+        // rso << *node;
+        // rso.flush();
+        // outFile << s << "\n";
     }
 }

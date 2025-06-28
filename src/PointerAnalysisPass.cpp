@@ -69,14 +69,9 @@ namespace
                 // Iterate through the points-to map and print the results
                 PA->printPointsToMap(outFile);
 
-                if (AnalysisMode == "origin")
+                if (PA->TaintingEnabled)
                 {
-                    // Print the tainted objects and their pointers
-                    auto *OPA = dynamic_cast<OriginPointerAnalysis *>(PA.get());
-                    if (OPA)
-                    {
-                        OPA->printTaintedObjects(outFile);
-                    }
+                    PA->printTaintedNodes(outFile);
                 }
 
                 outFile.close(); // Close the file after writing
@@ -109,7 +104,7 @@ extern "C" LLVM_ATTRIBUTE_WEAK ::llvm::PassPluginLibraryInfo llvmGetPassPluginIn
             PB.registerPipelineParsingCallback(
                 [](StringRef Name, ModulePassManager &MPM, ArrayRef<PassBuilder::PipelineElement>)
                 {
-                    if (Name == "pointer-analysis")
+                    if (Name == "pap")
                     {
                         MPM.addPass(PointerAnalysisPass());
                         return true;

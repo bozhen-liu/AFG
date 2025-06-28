@@ -302,8 +302,9 @@ namespace llvm
         bool DebugMode = false;          // Debug flag to enable or disable debugging output
         int MaxVisit = 2;                // Maximum number of times a CGNode can be visited
         bool HandleIndirectCalls = true; // Whether to handle indirect calls
+        bool TaintingEnabled = false;    // Enable tainting analysis
 
-        virtual void analyze(Module &M);
+        void analyze(Module &M);
         const CallGraph &getCallGraph() const { return callGraph; }
         const std::unordered_set<Function *> &getVisitedFunctions() const
         {
@@ -345,7 +346,8 @@ namespace llvm
         void visitAtomicCmpXchgInst(AtomicCmpXchgInst &I);
         virtual void visitInvokeInst(InvokeInst &I);
         virtual void visitCallInst(CallInst &I);
-        void visitInstruction(Instruction &I); // fallback
+        void addConstraintForCall(CallBase &CB, Function *F); // Add constraints for call instructions, including parameters and return value
+        void visitInstruction(Instruction &I);                // fallback
 
         void processAssignConstraint(const llvm::Constraint &constraint);
         void processAddressOfConstraint(const llvm::Constraint &constraint);
@@ -358,6 +360,8 @@ namespace llvm
 
         ChannelSemantics *channelSemantics; // Channel semantics integration
         void setChannelSemantics(ChannelSemantics *cs) { channelSemantics = cs; }
+
+        void printTaintedNodes(std::ofstream &outFile);
 
     protected:
         uint64_t nextNodeId = 0; // Monotonically increasing node ID
@@ -399,6 +403,20 @@ namespace llvm
 
         // Channel-specific analysis methods
         bool handleChannelConstraints();
+
+        // the following for taint analysis
+        struct FnSignature
+        {
+            std::string fn_name;           // package name::function name
+            std::vector<std::string> args; // argument types -> impossible to match due to pointer and compiler optimizations
+            std::string returnType;        // return type
+        };
+
+        std::string taintJsonFile;                             // JSON file name
+        std::unordered_set<FnSignature *> TaintedFnSignatures; // tainted function signatures from JSON
+        std::unordered_set<uint64_t> TaintedNodeIDs;           // node ids that are tainted
+        bool parseTaintConfig(Module &M);
+        bool isTaintedFunction(const CallBase &callsite);
     };
 
 } // namespace llvm

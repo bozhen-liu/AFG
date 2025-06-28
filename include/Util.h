@@ -80,3 +80,12 @@ static bool isDbgPointer(const llvm::Value *V)
     }
     return false;
 }
+
+// Helper function to convert LLVM Type to string
+static std::string getTypeAsString(const llvm::Type *type)
+{
+    std::string typeStr;
+    llvm::raw_string_ostream rso(typeStr);
+    type->print(rso);
+    return rso.str();
+}
