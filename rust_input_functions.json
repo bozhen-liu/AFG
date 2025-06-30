@@ -1,16 +1,14 @@
 {
     "ChatGPT": [
         {
-            "path": "src-tauri/src/app/gpt.rs",
             "fn_name": "sync_prompts",
             "return_type": "Option<Vec<PromptRecord>>",
             "parameter_type": [
-                "app: AppHandle",
-                "time: u64"
+                "AppHandle",
+                "u64"
             ]
         },
         {
-            "path": "src-tauri/src/conf.rs",
             "fn_name": "new",
             "return_type": "Self",
             "parameter_type": [
@@ -20,27 +18,24 @@
     ],
     "Pake": [
         {
-            "path": "src-tauri/src/app/invoke.rs",
             "fn_name": "download_file",
             "return_type": "Result<(), String>",
             "parameter_type": [
-                "app: AppHandle",
-                "params: DownloadFileParams"
+                "AppHandle",
+                "DownloadFileParams"
             ]
         },
         {
-            "path": "src-tauri/src/app/invoke.rs",
             "fn_name": "download_file_by_binary",
             "return_type": "Result<(), String>",
             "parameter_type": [
-                "app: AppHandle",
-                "params: BinaryDownloadParams"
+                "AppHandle",
+                "BinaryDownloadParams"
             ]
         }
     ],
     "chat-ai-desktop": [
         {
-            "path": "src-tauri/src/main.rs",
             "fn_name": "main",
             "return_type": "void",
             "parameter_type": [
@@ -50,66 +45,59 @@
     ],
     "Tabby": [
         {
-            "path": "crates/http-api-bindings/src/completion/mod.rs",
             "fn_name": "create",
             "return_type": "Arc<dyn CompletionStream>",
             "parameter_type": [
-                "model: &HttpModelConfig"
+                "&HttpModelConfig"
             ]
         },
         {
-            "path": "crates/ollama-api-bindings/src/completion.rs",
             "fn_name": "generate",
             "return_type": "BoxStream<String>",
             "parameter_type": [
                 "&self",
-                "prompt: &str",
-                "options: CompletionOptions"
+                "&str",
+                "CompletionOptions"
             ]
         },
         {
-            "path": "crates/http-api-bindings/src/chat/mod.rs",
             "fn_name": "create",
             "return_type": "Arc<dyn ChatCompletionStream>",
             "parameter_type": [
-                "model: &HttpModelConfig"
+                "&HttpModelConfig"
             ]
         },
         {
-            "path": "crates/tabby-crawler/src/llms_text_parser.rs",
             "fn_name": "split_llms_content",
             "return_type": "Vec<CrawledDocument>",
             "parameter_type": [
-                "content: &str",
-                "base_url: &str"
+                "&str",
+                "&str"
             ]
         },
         {
-            "path": "crates/tabby-inference/src/chat.rs",
             "fn_name": "chat",
             "return_type": "Result<CreateChatCompletionResponse, OpenAIError>",
             "parameter_type": [
                 "&self",
-                "request: CreateChatCompletionRequest"
+                "CreateChatCompletionRequest"
             ]
         },
         {
-            "path": "crates/tabby-inference/src/chat.rs",
             "fn_name": "chat_stream",
             "return_type": "Result<ChatCompletionResponseStream, OpenAIError>",
             "parameter_type": [
                 "&self",
-                "request: CreateChatCompletionRequest"
+                "CreateChatCompletionRequest"
             ]
         },
         {
-            "path": "crates/tabby-inference/src/completion.rs",
             "fn_name": "generate",
             "return_type": "BoxStream<String>",
             "parameter_type": [
                 "&self",
-                "prompt: &str",
-                "options: CompletionOptions"
+                "&str",
+                "CompletionOptions"
             ]
         }
     ],
