@@ -27,7 +27,7 @@ static bool isThreadRelatedCallInstruction(const Value *callsite)
 
             // TODO: Add more thread-related functions if needed
             return (demangled == "std::thread::spawn" ||
-                    demangled == "tokio::task::spawn");
+                    demangled == "tokio::task::spawn::spawn");
         }
     }
     return false;

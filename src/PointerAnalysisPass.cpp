@@ -22,17 +22,17 @@ namespace
             std::unique_ptr<PointerAnalysis> PA;
             if (AnalysisMode == "kcs")
             {
-                PA = std::make_unique<KCallsitePointerAnalysis>(KValue);
+                PA = std::make_unique<KCallsitePointerAnalysis>(KValue, M);
                 errs() << "Running k-callsite-sensitive pointer analysis with k = " << KValue << "\n";
             }
             else if (AnalysisMode == "origin")
             {
-                PA = std::make_unique<OriginPointerAnalysis>(KValue);
+                PA = std::make_unique<OriginPointerAnalysis>(KValue, M);
                 errs() << "Running origin pointer analysis with k = " << KValue << "\n";
             }
             else // Default to context-insensitive analysis
             {
-                PA = std::make_unique<PointerAnalysis>();
+                PA = std::make_unique<PointerAnalysis>(M);
                 errs() << "Running context-insensitive pointer analysis\n";
             }
             PA->DebugMode = DebugMode;                     // Set the debug mode based on the command line option
@@ -41,44 +41,46 @@ namespace
 
             auto start = std::chrono::high_resolution_clock::now(); // Start timing
 
-            PA->analyze(M);
+            PA->analyze();
 
             auto end = std::chrono::high_resolution_clock::now(); // End timing
             std::chrono::duration<double> elapsed = end - start;
 
-            // Output the results to a file
-            std::ofstream outFile(PA->getOutputFileName()); // Open the output file
-            if (outFile.is_open())
-            {
-                errs() << "Writing pointer analysis results to " << PA->getOutputFileName() << " ...\n";
+            if (OutputToFile)
+            {                                                   // Output the results to a file
+                std::ofstream outFile(PA->getOutputFileName()); // Open the output file
+                if (outFile.is_open())
+                {
+                    errs() << "Writing pointer analysis results to " << PA->getOutputFileName() << " ...\n";
 
-                if (DebugMode)
-                { // Print the names of visited functions
-                    outFile << "Visited Functions:\n";
-                    for (const auto *func : PA->getVisitedFunctions())
-                    {
-                        if (func)
+                    if (DebugMode)
+                    { // Print the names of visited functions
+                        outFile << "Visited Functions:\n";
+                        for (const auto *func : PA->getVisitedFunctions())
                         {
-                            outFile << "  - " << func->getName().str() << "\n";
+                            if (func)
+                            {
+                                outFile << "  - " << func->getName().str() << "\n";
+                            }
                         }
                     }
+
+                    // Print the call graph to the file
+                    PA->getCallGraph().printCG(outFile);
+                    // Iterate through the points-to map and print the results
+                    PA->printPointsToMap(outFile);
+
+                    if (PA->TaintingEnabled)
+                    {
+                        PA->printTaintedNodes(outFile);
+                    }
+
+                    outFile.close(); // Close the file after writing
                 }
-
-                // Print the call graph to the file
-                PA->getCallGraph().printCG(outFile);
-                // Iterate through the points-to map and print the results
-                PA->printPointsToMap(outFile);
-
-                if (PA->TaintingEnabled)
+                else
                 {
-                    PA->printTaintedNodes(outFile);
+                    errs() << "Error: Could not open file for writing results.\n";
                 }
-
-                outFile.close(); // Close the file after writing
-            }
-            else
-            {
-                errs() << "Error: Could not open file for writing results.\n";
             }
 
             errs() << "=== Pointer Analysis Time ===\n"

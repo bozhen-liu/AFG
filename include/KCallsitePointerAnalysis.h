@@ -12,7 +12,7 @@ namespace llvm
     public:
         unsigned K = 1; // Number of call sites to track for each function
 
-        KCallsitePointerAnalysis(unsigned k) : PointerAnalysis(), K(k) {}
+        KCallsitePointerAnalysis(unsigned k, Module &M) : PointerAnalysis(M), K(k) {}
 
         // context related methods: context is from caller, value is the new callsite, return a new context
         Context getContext(Context context, const Value *newCallSite) override;
