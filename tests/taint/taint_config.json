@@ -1,0 +1,6 @@
+{
+    "tagged_objects": [
+        "%tainted_var = alloca i32, align 4",
+        "@secret_data = private unnamed_addr constant <{ [16 x i8] }> <{ [16 x i8] c\"sensitive_secret\" }>, align 1"
+    ]
+}

@@ -1,0 +1,7 @@
+{
+    "tagged_objects": [
+        "@global_data = global i32 0",
+        "%local_var = alloca i32, align 4",
+        "@secret_config = global i32 12345"
+    ]
+}
