@@ -15,6 +15,7 @@
 #include <deque>
 #include "CallGraph.h"
 #include "ChannelSemantics.h"
+#include "Flags.h"
 
 namespace std
 {
@@ -31,14 +32,15 @@ namespace std
     };
 
     template <>
-    struct hash<std::tuple<llvm::Value *, llvm::Context, std::vector<uint64_t>>>
+    struct hash<std::tuple<llvm::Value *, llvm::Context, std::vector<uint64_t>, bool>>
     {
-        std::size_t operator()(const std::tuple<llvm::Value *, llvm::Context, std::vector<uint64_t>> &t) const noexcept
+        std::size_t operator()(const std::tuple<llvm::Value *, llvm::Context, std::vector<uint64_t>, bool> &t) const noexcept
         {
             std::size_t h1 = std::hash<llvm::Value *>()(std::get<0>(t));
             std::size_t h2 = std::hash<llvm::Context>()(std::get<1>(t));
             std::size_t h3 = std::hash<std::vector<uint64_t>>()(std::get<2>(t));
-            return h1 ^ (h2 << 1) ^ (h3 << 2);
+            std::size_t h4 = std::hash<bool>()(std::get<3>(t));
+            return h1 ^ (h2 << 1) ^ (h3 << 2) ^ (h4 << 3);
         }
     };
 }
@@ -63,6 +65,8 @@ namespace llvm
         Context context;                  // The context
         std::vector<uint64_t> offsets;    // For field-sensitive analysis, stores the offsets of the fields
         std::unordered_set<uint64_t> pts; // Points-to set (final)
+
+        llvm::Type *type; // type of the value (or the type the pointer can hold), used for type checking
 
         // used during solving and propogating
         std::unordered_set<uint64_t> diff; // newly added nodes into points-to set; will be added to pts after propogation and reset for next iteration
@@ -89,7 +93,7 @@ namespace llvm
         }
 
         // Constructor
-        Node(int nodeId, llvm::Value *v, Context ctx = Everywhere, std::vector<uint64_t> idx = {}) : id(nodeId), value(v), context(ctx), offsets(std::move(idx)) {}
+        Node(int nodeId, llvm::Value *v, Context ctx = Everywhere, std::vector<uint64_t> idx = {}) : id(nodeId), value(v), type(v ? v->getType() : nullptr), context(ctx), offsets(std::move(idx)) {}
 
         // Equality operator for unordered_map/unordered_set
         bool operator==(const Node &other) const
@@ -97,22 +101,29 @@ namespace llvm
             return value == other.value && context == other.context && id == other.id && offsets == other.offsets;
         }
 
-        void print(llvm::raw_ostream &os) const
+        virtual bool isAlloc() const
+        {
+            return false; // Base Node is not an allocation node
+        }
+
+        virtual void print(llvm::raw_ostream &os) const
         {
             os << "[Node id=" << id << ", value=";
             if (value)
             {
                 if (auto f = dyn_cast<Function>(value))
-                {
                     os << f->getName();
-                }
                 else
-                {
                     value->print(os);
-                }
             }
             else
                 os << "null";
+            // os << ", type=";
+            // if (type)
+            //     type->print(os, false);
+            // else
+            //     os << "null";
+            // os << ", ";
             if (auto *inst = llvm::dyn_cast<llvm::Instruction>(value))
             {
                 llvm::Function *func = inst->getParent()->getParent();
@@ -127,6 +138,10 @@ namespace llvm
                 {
                     os << " (arg of function " << func->getName() << ")";
                 }
+            }
+            else if (auto *func = llvm::dyn_cast<llvm::Function>(value))
+            {
+                os << " (ret of function " << func->getName() << ")";
             }
             else
             {
@@ -193,8 +208,169 @@ namespace llvm
         }
     };
 
+    struct AllocNode : public Node
+    {
+        llvm::Type *type; // allocated type, used for type checking
+
+        // Constructor: call base Node constructor
+        AllocNode(int nodeId, llvm::Value *v, Context ctx = Everywhere, std::vector<uint64_t> idx = {})
+            : Node(nodeId, v, ctx, std::move(idx))
+        {
+            if (auto *allocaInst = dyn_cast<AllocaInst>(v))
+            {
+                type = allocaInst->getAllocatedType();
+
+                if (DebugMode)
+                {
+                    errs() << "AllocNode created with id=" << id << ", value=" << v << "\n";
+
+                    if (auto *structType = dyn_cast<StructType>(type))
+                    { // If it's a named struct
+                        if (structType->hasName())
+                        {
+                            errs() << "Struct name: " << structType->getName() << "\n";
+
+                            // inspect fields
+                            for (unsigned i = 0; i < structType->getNumElements(); ++i)
+                            {
+                                Type *field = structType->getElementType(i);
+                                errs() << "  Field " << i << ": ";
+                                field->print(errs());
+                                errs() << "\n";
+                            }
+                        }
+                        else
+                        { // is anonymous struct
+                            errs() << "Anonymous struct with " << structType->getNumElements() << " elements:\n";
+                            for (unsigned i = 0; i < structType->getNumElements(); ++i)
+                            {
+                                Type *field = structType->getElementType(i);
+                                errs() << "  Field " << i << ": ";
+                                field->print(errs());
+                                errs() << "\n";
+                            }
+                        }
+                    }
+                    else if (auto *AT = dyn_cast<ArrayType>(type))
+                    {
+                        errs() << "Array of " << AT->getNumElements() << " elements of type: ";
+                        AT->getElementType()->print(errs());
+                        errs() << "\n";
+                    }
+                    else if (type->isPointerTy())
+                    {
+                        errs() << "Pointer to type: ";
+                        type->print(errs());
+                        errs() << "\n";
+                    }
+                    else if (type->isIntegerTy())
+                    {
+                        errs() << "Integer type: i" << cast<IntegerType>(type)->getBitWidth() << "\n";
+                    }
+                    else if (type->isFloatingPointTy())
+                    {
+                        errs() << "Floating point type";
+                    }
+                    else
+                    {
+                        errs() << "Other type: ";
+                        type->print(errs());
+                        errs() << "\n";
+                    }
+                }
+            }
+        }
+
+        bool isAlloc() const override
+        {
+            return true; // AllocNode is always an allocation node
+        }
+
+        // You can override print to include alloc info
+        void print(llvm::raw_ostream &os) const override
+        {
+            os << "[AllocNode id=" << id << ", value=";
+            if (value)
+            {
+                if (auto f = dyn_cast<Function>(value))
+                    os << f->getName();
+                else
+                    value->print(os);
+            }
+            else
+                os << "null";
+            // os << ", type=";
+            // if (type)
+            //     type->print(os, false);
+            // else
+            //     os << "null";
+            // os << ", ";
+            if (auto *inst = llvm::dyn_cast<llvm::Instruction>(value))
+            {
+                llvm::Function *func = inst->getParent()->getParent();
+                if (func)
+                {
+                    os << " (from function " << func->getName() << ")";
+                }
+            }
+            // else if (auto *arg = llvm::dyn_cast<llvm::Argument>(value))
+            // {
+            //     if (auto *func = arg->getParent())
+            //     {
+            //         os << " (arg of function " << func->getName() << ")";
+            //     }
+            // }
+            // else if (auto *func = llvm::dyn_cast<llvm::Function>(value))
+            // {
+            //     os << " (ret of function " << func->getName() << ")";
+            // }
+            else
+            {
+                os << " (no function context)";
+            }
+            os << ", context=";
+            os << "[";
+            if (context == Everywhere)
+            {
+                os << "Everywhere";
+            }
+            else
+            {
+
+                for (auto it = context.begin(); it != context.end(); ++it)
+                {
+                    if (*it)
+                        (*it)->print(os);
+                    else
+                        os << "null";
+                    if (std::next(it) != context.end())
+                        os << ", ";
+                }
+            }
+            os << "]";
+            if (!offsets.empty())
+            {
+                os << ", indices=["; // or fields
+                for (size_t i = 0; i < offsets.size(); ++i)
+                {
+                    os << offsets[i];
+                    if (i + 1 < offsets.size())
+                        os << ",";
+                }
+                os << "]";
+            }
+        }
+    };
+
     // Overload operator<< for Node as a free function
     inline llvm::raw_ostream &operator<<(llvm::raw_ostream &os, const llvm::Node &node)
+    {
+        node.print(os);
+        return os;
+    }
+
+    // Overload operator<< for AllocNode as a free function
+    inline llvm::raw_ostream &operator<<(llvm::raw_ostream &os, const llvm::AllocNode &node)
     {
         node.print(os);
         return os;
@@ -303,8 +479,15 @@ namespace llvm
         int MaxVisit = 2;                // Maximum number of times a CGNode can be visited
         bool HandleIndirectCalls = true; // Whether to handle indirect calls
         bool TaintingEnabled = false;    // Enable tainting analysis
+        Module &M;
 
-        void analyze(Module &M);
+        PointerAnalysis(Module &M) : M(M)
+        {
+            if (DebugMode)
+                llvm::errs() << "PointerAnalysis initialized with module: " << M.getName() << "\n";
+        }
+
+        void analyze();
         const CallGraph &getCallGraph() const { return callGraph; }
         const std::unordered_set<Function *> &getVisitedFunctions() const
         {
@@ -328,8 +511,8 @@ namespace llvm
 
         std::vector<Constraint> Worklist; // Worklist for new constraints to visit
 
-        Node *getOrCreateNode(llvm::Value *value, Context context = Everywhere, std::vector<uint64_t> indices = {}); // create or find node: ctx == Everywhere
-        Node *getNodebyID(uint64_t id);                                                                              // Get node by ID
+        Node *getOrCreateNode(llvm::Value *value, Context context = Everywhere, std::vector<uint64_t> indices = {}, bool isAlloc = false); // create or find node: ctx == Everywhere
+        Node *getNodebyID(uint64_t id);                                                                                                    // Get node by ID
         virtual Context getContext(Context context = Everywhere, const Value *newCallSite = nullptr);
         virtual void processInstruction(Instruction &I, CGNode *cgnode);
 
@@ -346,6 +529,7 @@ namespace llvm
         void visitAtomicCmpXchgInst(AtomicCmpXchgInst &I);
         virtual void visitInvokeInst(InvokeInst &I);
         virtual void visitCallInst(CallInst &I);
+        void visitReturnInst(ReturnInst &I);
         void addConstraintForCall(CallBase &CB, Function *F); // Add constraints for call instructions, including parameters and return value
         void visitInstruction(Instruction &I);                // fallback
 
@@ -354,9 +538,9 @@ namespace llvm
         void processGEPConstraint(const llvm::Constraint &constraint); // Process GEP constraints
         void processLoadConstraint(const llvm::Constraint &constraint);
         void processStoreConstraint(const llvm::Constraint &constraint);
-        void processInvokeConstraints(const llvm::Constraint &constraint);                      // Process constraints for indirect invoke instructions
-        bool handleRustTry(CallBase &CB, Function *F);                                          // handle __rust_try
-        void handleDeclaredFunction(CallBase &CI, Function *F, CGNode realCaller = NullCGNode); // Handle certain declared functions: call invoked through vtable needs realCaller
+        void processInvokeConstraints(const llvm::Constraint &constraint);                             // Process constraints for indirect invoke instructions
+        bool handleRustTry(CallBase &CB, Function *F);                                                 // handle __rust_try
+        void handleSpecialDeclaredFunction(CallBase &CI, Function *F, CGNode realCaller = NullCGNode); // Handle certain declared functions: call invoked through vtable needs realCaller
 
         ChannelSemantics *channelSemantics; // Channel semantics integration
         void setChannelSemantics(ChannelSemantics *cs) { channelSemantics = cs; }
@@ -373,8 +557,8 @@ namespace llvm
         std::unordered_map<CGNode, int> VisitCount;       // Track the number of visits for each function/cgnode
         std::vector<CGNode> FunctionWorklist;             // Worklist for new functions (with context) to visit
 
-        std::unordered_map<std::tuple<llvm::Value *, Context, std::vector<uint64_t>>, Node *> ValueContextToNodeMap; // Map to track Value and context pairs to Node
-        std::unordered_map<ConstantAggregate *, std::vector<Function *>> vtableToFunctionMap;                        // Map to track vtable to function mappings
+        std::unordered_map<std::tuple<llvm::Value *, Context, std::vector<uint64_t>, bool>, Node *> ValueContextToNodeMap; // Map to track Value and context pairs to Node
+        std::unordered_map<ConstantAggregate *, std::vector<Function *>> vtableToFunctionMap;                              // Map to track vtable to function mappings
 
         std::vector<llvm::Function *> getVtable(GlobalVariable *GV); // compute vtable's functions and store to vtableToFunctionMap
         bool excludeFunctionFromAnalysis(Function *F);               // Exclude certain functions from analysis, e.g., llvm.dbg.declare
@@ -401,6 +585,8 @@ namespace llvm
         llvm::Function *parseMainFn(Module &M); // Parse the main function from the module
         void onthefly(Module &M);               // On-the-fly analysis
 
+        bool isTypeCompatible(Type *ptrType, Type *allocaType); // Check if the pointer type is compatible with the alloca type
+
         // Channel-specific analysis methods
         bool handleChannelConstraints();
 
@@ -417,6 +603,11 @@ namespace llvm
         std::unordered_set<uint64_t> TaintedNodeIDs;           // node ids that are tainted
         bool parseTaintConfig(Module &M);
         bool isTaintedFunction(const CallBase &callsite);
+
+        // the following for handling tokio tasks with less constraints
+        std::unordered_map<std::string, llvm::Node *> fnName2TaskNodeMap; // Map from function name to task node, e.g., _ZN4demo16spawn_user_query17he2469db56cab90c3E -> sret(%"[async fn body@src/main.rs:14:3: 36:2]") %0 in examples/tokio-demo/src/main.rs
+        bool handleTokioTask(CallBase &CB, Function *calledFn);
+        bool handleTokioRawVtable(CallBase &CB, Function *F); // handle tokio raw vtable functions
     };
 
 } // namespace llvm

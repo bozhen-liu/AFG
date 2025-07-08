@@ -27,3 +27,8 @@ cl::opt<unsigned> MaxVisit(
     "max-visit",
     cl::desc("Maximum number of times a CGNode can be visited"),
     cl::init(2));
+
+cl::opt<bool> OutputToFile(
+    "output",
+    cl::desc("Output pointer analysis results to a file"),
+    cl::init(false));

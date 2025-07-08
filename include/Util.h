@@ -4,6 +4,7 @@
 #include "llvm/Demangle/Demangle.h"
 #include <string>
 #include <algorithm>
+#include <regex>
 
 // Helper function to trim leading and trailing spaces
 inline std::string trim(const std::string &str)
@@ -88,4 +89,17 @@ static std::string getTypeAsString(const llvm::Type *type)
     llvm::raw_string_ostream rso(typeStr);
     type->print(rso);
     return rso.str();
+}
+
+// Helper function to strip Rust-style hash suffix from function names
+// e.g., 17he2469db56cab90c3E from _ZN4demo16spawn_user_query17he2469db56cab90c3E
+static std::string stripRustHash(const std::string &fnName)
+{
+    std::regex hashPattern("^(.*)h[0-9a-fA-F]{16,}$");
+    std::smatch match;
+    if (std::regex_match(fnName, match, hashPattern))
+    {
+        return match[1].str().substr(0, match[1].length() - 2); // Remove the trailing '17h'
+    }
+    return fnName;
 }

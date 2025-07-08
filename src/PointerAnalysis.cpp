@@ -15,7 +15,7 @@
 using json = nlohmann::json;
 using namespace llvm;
 
-void PointerAnalysis::analyze(Module &M)
+void PointerAnalysis::analyze()
 {
     if (!parseOutputDir(M))
     {
@@ -245,6 +245,18 @@ bool PointerAnalysis::excludeFunctionFromAnalysis(Function *F)
         return true;
     }
 
+    // std::string demangledName = getDemangledName(name.str());
+    // if (demangledName.find("tokio") != std::string::npos &&
+    //     demangledName != "tokio::task::spawn::spawn")
+    //     demangledName.find("tokio::runtime::scheduler::current_thread") != std::string::npos)
+    // tokio::macros::scoped_tls
+    // tokio::runtime::runtime::Runtime::block_on
+    // {
+    //     if (DebugMode)
+    //         errs() << "Excluding tokio function from analysis: " << demangledName << "\n";
+    //     return true;
+    // }
+
     return false;
 }
 
@@ -289,7 +301,7 @@ void PointerAnalysis::visitFunction(CGNode *cgnode)
     }
 }
 
-Node *PointerAnalysis::getOrCreateNode(llvm::Value *value, Context context, std::vector<uint64_t> offsets)
+Node *PointerAnalysis::getOrCreateNode(llvm::Value *value, Context context, std::vector<uint64_t> offsets, bool isAlloc)
 {
     // Ignore pointers with .dbg. in their name (e.g., %ret.dbg.spill), which are for debug purposes only
     if (isDbgPointer(value))
@@ -305,14 +317,14 @@ Node *PointerAnalysis::getOrCreateNode(llvm::Value *value, Context context, std:
     }
 
     // Check if the node already exists in the map
-    auto it = ValueContextToNodeMap.find(std::make_tuple(value, context, offsets));
+    auto it = ValueContextToNodeMap.find(std::make_tuple(value, context, offsets, isAlloc));
     if (it != ValueContextToNodeMap.end())
     {
         return it->second;
     }
-    Node *node = new Node(nextNodeId++, value, context, offsets);
+    Node *node = isAlloc ? new AllocNode(nextNodeId++, value, context, offsets) : new Node(nextNodeId++, value, context, offsets);
     idToNodeMap[node->id] = node;
-    ValueContextToNodeMap[std::make_tuple(value, context, offsets)] = node;
+    ValueContextToNodeMap[std::make_tuple(value, context, offsets, isAlloc)] = node;
     return node;
 }
 
@@ -425,32 +437,27 @@ std::vector<llvm::Function *> PointerAnalysis::getVtable(GlobalVariable *GV)
                 errs() << "Vtable has no initializer.\n";
         }
     }
+    else
+    {
+        errs() << "!! !! seeing alloc function: " << GV->getName() << "\n";
+    }
 
     return {}; // Return an empty vector if no vtable functions are found
 }
 
 void PointerAnalysis::processGlobalVar(GlobalVariable &GV)
 {
+    if (DebugMode)
+        errs() << "Added global variable \"" << GV << "\" to the worklist.\n";
+
     // Check if the global variable is a pointer type
     if (GV.getType()->isPointerTy())
     {
-        Node *gvNode = getOrCreateNode(&GV);
-        addConstraint({Assign, UINT64_MAX, gvNode->id}); // Points to self
-
-        if (DebugMode)
-            errs() << "Added global variable \"" << *gvNode << "\" to the worklist.\n";
-
-        for (const User *U : GV.users())
-        {
-            if (const Instruction *I = dyn_cast<Instruction>(U))
-            {
-                if (I->getType()->isPointerTy())
-                {
-                    Node *useNode = getOrCreateNode(const_cast<Instruction *>(I), getContext());
-                    addConstraint({AddressOf, gvNode->id, useNode->id});
-                }
-            }
-        }
+        AllocNode *gvNode = static_cast<AllocNode *>(getOrCreateNode(&GV, Everywhere, {}, true));
+        Node *gvPtrNode = getOrCreateNode(&GV, getContext());
+        if (!gvNode || !gvPtrNode)
+            return;
+        addConstraint({AddressOf, gvNode->id, gvPtrNode->id}); // Points to self
     }
 }
 
@@ -459,31 +466,16 @@ void PointerAnalysis::visitAllocaInst(AllocaInst &AI)
     if (DebugMode)
         errs() << "Processing alloca: " << AI << "\n";
 
-    Node *aiNode = getOrCreateNode(&AI, getContext());
-    if (!aiNode)
+    AllocNode *aiNode = static_cast<AllocNode *>(getOrCreateNode(&AI, getContext(), {}, true));
+    Node *aiPtrNode = getOrCreateNode(&AI, getContext());
+    if (!aiNode || !aiPtrNode)
         return;
 
-    addConstraint({Assign, UINT64_MAX, aiNode->id}); // Points to self
+    addConstraint({AddressOf, aiNode->id, aiPtrNode->id}); // Points to self
 
     if (channelSemantics->isChannelAlloc(AI))
     {
         channelSemantics->createChannelInfo(&AI, aiNode);
-    }
-
-    // Generate AddressOf constraints for uses of this alloca
-    for (const User *U : AI.users())
-    {
-        if (const Instruction *I = dyn_cast<Instruction>(U))
-        {
-            // If the use is a pointer-typed instruction (e.g., bitcast, GEP, etc.)
-            if (I->getType()->isPointerTy())
-            {
-                Node *useNode = getOrCreateNode(const_cast<Instruction *>(I), getContext());
-                if (!useNode)
-                    continue;
-                addConstraint({AddressOf, aiNode->id, useNode->id});
-            }
-        }
     }
 }
 
@@ -494,7 +486,7 @@ void PointerAnalysis::visitBitCastInst(BitCastInst &BC)
 
     if (BC.getType()->isPointerTy())
     {
-        Value *basePtr = BC.getOperand(0);
+        Value *basePtr = BC.getOperand(0)->stripPointerCasts();
         Node *basePtrNode = getOrCreateNode(basePtr, getContext());
         Node *bcNode = getOrCreateNode(&BC, getContext());
         if (!basePtrNode || !bcNode)
@@ -508,8 +500,8 @@ void PointerAnalysis::visitStoreInst(StoreInst &SI)
     if (DebugMode)
         errs() << "Processing store: " << SI << "\n";
 
-    Value *val = SI.getValueOperand();
-    Value *ptr = SI.getPointerOperand();
+    Value *val = SI.getValueOperand()->stripPointerCasts();
+    Value *ptr = SI.getPointerOperand()->stripPointerCasts();
     if (val->getType()->isPointerTy())
     {
         // src -store-> dst (offsets)
@@ -530,6 +522,11 @@ void PointerAnalysis::visitStoreInst(StoreInst &SI)
                     offsets.push_back(~0ULL); // Unknown index
             }
         }
+        else
+        {
+            // Not a GEP — treat as access to base field (e.g., offset 0)
+            offsets.push_back(0);
+        }
 
         addConstraint({Store, valNode->id, ptrNode->id, offsets});
     }
@@ -540,13 +537,14 @@ void PointerAnalysis::visitLoadInst(LoadInst &LI)
     if (DebugMode)
         errs() << "Processing load: " << LI << "\n";
 
-    Value *ptr = LI.getPointerOperand();
+    Value *ptr = LI.getPointerOperand()->stripPointerCasts();
+    Value *dest = &LI; // The loaded value is the result of the instruction
     if (LI.getType()->isPointerTy())
     {
         // src (offsets) -load-> dst
         Node *ptrNode = getOrCreateNode(ptr, getContext());
-        Node *loadNode = getOrCreateNode(&LI, getContext());
-        if (!ptrNode || !loadNode)
+        Node *destNode = getOrCreateNode(dest, getContext());
+        if (!ptrNode || !destNode)
             return;
 
         // Field-sensitive: extract offsets if ptr is a GEP
@@ -561,8 +559,13 @@ void PointerAnalysis::visitLoadInst(LoadInst &LI)
                     offsets.push_back(~0ULL); // Unknown index
             }
         }
+        else
+        {
+            // Not a GEP — fallback to base field offset
+            offsets.push_back(0);
+        }
 
-        addConstraint({Load, ptrNode->id, loadNode->id, offsets});
+        addConstraint({Load, ptrNode->id, destNode->id, offsets});
     }
 }
 
@@ -573,7 +576,7 @@ void PointerAnalysis::visitGetElementPtrInst(GetElementPtrInst &GEP)
 
     if (GEP.getType()->isPointerTy())
     {
-        Value *basePtr = GEP.getPointerOperand();
+        Value *basePtr = GEP.getPointerOperand()->stripPointerCasts();
         Node *basePtrNode = getOrCreateNode(basePtr, getContext());
         Node *gepNode = getOrCreateNode(&GEP, getContext());
         if (!basePtrNode || !gepNode)
@@ -596,11 +599,14 @@ void PointerAnalysis::visitGetElementPtrInst(GetElementPtrInst &GEP)
 // TODO: handle other pointer-producing unary ops here if needed
 void PointerAnalysis::visitUnaryOperator(UnaryOperator &UO)
 {
+    if (DebugMode)
+        errs() << "Processing unary operator: " << UO << "\n";
+
     if (isa<AddrSpaceCastInst>(&UO)) // Handle address-of operator (&)
     {
         if (UO.getType()->isPointerTy())
         {
-            Node *srcNode = getOrCreateNode(UO.getOperand(0), getContext());
+            Node *srcNode = getOrCreateNode(UO.getOperand(0)->stripPointerCasts(), getContext());
             Node *dstNode = getOrCreateNode(&UO, getContext());
             if (!srcNode || !dstNode)
                 return;
@@ -616,7 +622,7 @@ void PointerAnalysis::visitExtractValueInst(ExtractValueInst &EVI)
 
     if (EVI.getType()->isPointerTy())
     {
-        Value *aggregate = EVI.getAggregateOperand();
+        Value *aggregate = EVI.getAggregateOperand()->stripPointerCasts();
         Node *aggNode = getOrCreateNode(aggregate, getContext());
         Node *resultNode = getOrCreateNode(&EVI, getContext());
         if (!aggNode || !resultNode)
@@ -634,7 +640,7 @@ void PointerAnalysis::visitPHINode(PHINode &PN)
     {
         for (unsigned i = 0; i < PN.getNumIncomingValues(); ++i)
         {
-            Value *incoming = PN.getIncomingValue(i);
+            Value *incoming = PN.getIncomingValue(i)->stripPointerCasts();
             Node *incomingNode = getOrCreateNode(incoming, getContext());
             Node *PNNode = getOrCreateNode(&PN, getContext());
             if (!incomingNode || !PNNode)
@@ -649,11 +655,11 @@ void PointerAnalysis::visitAtomicRMWInst(AtomicRMWInst &ARMW)
     if (DebugMode)
         errs() << "Processing atomic RMW: " << ARMW << "\n";
 
-    Value *ptr = ARMW.getPointerOperand();
+    Value *ptr = ARMW.getPointerOperand()->stripPointerCasts();
     if (ptr->getType()->isPointerTy())
     {
         Node *ptrNode = getOrCreateNode(ptr, getContext());
-        Node *valNode = getOrCreateNode(ARMW.getValOperand(), getContext());
+        Node *valNode = getOrCreateNode(ARMW.getValOperand()->stripPointerCasts(), getContext());
         if (!ptrNode || !valNode)
             return;
         addConstraint({Store, valNode->id, ptrNode->id});
@@ -665,11 +671,11 @@ void PointerAnalysis::visitAtomicCmpXchgInst(AtomicCmpXchgInst &ACX)
     if (DebugMode)
         errs() << "Processing atomic compare-and-swap: " << ACX << "\n";
 
-    Value *ptr = ACX.getPointerOperand();
+    Value *ptr = ACX.getPointerOperand()->stripPointerCasts();
     if (ptr->getType()->isPointerTy())
     {
         Node *ptrNode = getOrCreateNode(ptr, getContext());
-        Node *newValNode = getOrCreateNode(ACX.getNewValOperand(), getContext());
+        Node *newValNode = getOrCreateNode(ACX.getNewValOperand()->stripPointerCasts(), getContext());
         if (!ptrNode || !newValNode)
             return;
         addConstraint({Store, newValNode->id, ptrNode->id});
@@ -679,9 +685,7 @@ void PointerAnalysis::visitAtomicCmpXchgInst(AtomicCmpXchgInst &ACX)
 void PointerAnalysis::visitInvokeInst(InvokeInst &II)
 {
     if (excludeFunctionFromAnalysis(II.getCalledFunction()))
-    {
         return;
-    }
 
     if (DebugMode)
         errs() << "Processing invoke: " << II << "\n";
@@ -692,6 +696,11 @@ void PointerAnalysis::visitInvokeInst(InvokeInst &II)
     Function *calledFn = II.getCalledFunction();
     if (calledFn) // handle direct calls
     {
+        if (handleTokioRawVtable(II, calledFn))
+            return;                        // done processing for tokio raw vtable
+        if (handleTokioTask(II, calledFn)) // handle tokio spawn task if applicable
+            return;                        // done processing for tokio spawn task
+
         if (DebugMode)
             errs() << "Direct call to function: " << calledFn->getName() << "\n";
 
@@ -701,7 +710,7 @@ void PointerAnalysis::visitInvokeInst(InvokeInst &II)
 
         if (calledFn->isDeclaration())
         {
-            handleDeclaredFunction(II, calledFn, callee);
+            handleSpecialDeclaredFunction(II, calledFn, callee);
             return; // Skip declarations
         }
 
@@ -732,9 +741,7 @@ void PointerAnalysis::visitInvokeInst(InvokeInst &II)
 void PointerAnalysis::visitCallInst(CallInst &CI)
 {
     if (excludeFunctionFromAnalysis(CI.getCalledFunction()))
-    {
         return;
-    }
 
     if (DebugMode)
         errs() << "Processing call: " << CI << "\n";
@@ -747,9 +754,7 @@ void PointerAnalysis::visitCallInst(CallInst &CI)
     if (calledFn)
     {
         if (handleRustTry(CI, calledFn))
-        {
             return; // done processing for __rust_try
-        }
 
         // Add to the call graph
         CGNode callee = callGraph.getOrCreateNode(calledFn, CurrentContext);
@@ -757,7 +762,7 @@ void PointerAnalysis::visitCallInst(CallInst &CI)
 
         if (calledFn->isDeclaration())
         {
-            handleDeclaredFunction(CI, calledFn, callee);
+            handleSpecialDeclaredFunction(CI, calledFn, callee);
             return; // done processing for declarations
         }
 
@@ -770,7 +775,7 @@ void PointerAnalysis::visitCallInst(CallInst &CI)
     {
         // Handle indirect calls
         // usually the first argument in the invoke or call when calling a virtual or trait method.
-        Node *basePtrNode = getOrCreateNode(CI.getCalledOperand(), CurrentContext);
+        Node *basePtrNode = getOrCreateNode(CI.getCalledOperand()->stripPointerCasts(), CurrentContext);
         Node *callNode = getOrCreateNode(&CI, CurrentContext);
         if (!basePtrNode || !callNode)
             return; // Skip if nodes cannot be created
@@ -784,6 +789,22 @@ void PointerAnalysis::visitCallInst(CallInst &CI)
     }
 }
 
+void PointerAnalysis::visitReturnInst(ReturnInst &I)
+{
+    if (DebugMode)
+        errs() << "Processing return: " << I << "\n";
+
+    // Handle return value if it is a pointer
+    if (I.getReturnValue() && I.getReturnValue()->getType()->isPointerTy())
+    {
+        Node *returnNode = getOrCreateNode(I.getReturnValue()->stripPointerCasts(), CurrentContext);
+        Node *calleeNode = getOrCreateNode(I.getParent()->getParent(), CurrentContext);
+        if (!returnNode || !calleeNode)
+            return; // Skip if nodes cannot be created
+        addConstraint({Assign, returnNode->id, calleeNode->id});
+    }
+}
+
 void PointerAnalysis::addConstraintForCall(CallBase &CB, Function *callee)
 {
     bool taint = (TaintingEnabled && isTaintedFunction(CB));
@@ -791,7 +812,7 @@ void PointerAnalysis::addConstraintForCall(CallBase &CB, Function *callee)
     // Add constraints for parameter passing
     for (unsigned i = 0; i < CB.arg_size(); ++i)
     {
-        Value *arg = CB.getArgOperand(i);
+        Value *arg = CB.getArgOperand(i)->stripPointerCasts();
         if (arg->getType()->isPointerTy())
         {
             Node *argNode = getOrCreateNode(arg, CurrentContext);
@@ -934,9 +955,148 @@ bool PointerAnalysis::handleRustTry(CallBase &CB, Function *F)
     return false;
 }
 
+bool PointerAnalysis::handleTokioRawVtable(CallBase &CB, Function *F)
+{
+    if (getDemangledName(F->getName().str()) == "tokio::runtime::task::raw::vtable")
+    {
+        if (DebugMode)
+            errs() << "Handling return in tokio::runtime::task::raw::vtable: " << CB << "\n";
+
+        Node *returnNode = getOrCreateNode(&CB, CurrentContext);
+
+        // get the 1st (and only) instruction in the 1st (and only) basic block of the function
+        auto inst = F->getEntryBlock().getFirstNonPHIOrDbg();
+        if (auto ret = dyn_cast<ReturnInst>(inst))
+        {
+            if (DebugMode)
+                errs() << "Found return instruction in tokio::runtime::task::raw::vtable: " << *ret << "\n";
+
+            // Handle the return value
+            if (ret->getReturnValue() && ret->getReturnValue()->getType()->isPointerTy())
+            {
+                Node *retNode = getOrCreateNode(ret->getReturnValue(), CurrentContext);
+                if (!retNode || !returnNode)
+                    return false; // Skip if nodes cannot be created
+                addConstraint({Assign, retNode->id, returnNode->id});
+            }
+        }
+        else
+        {
+            errs() << "Warning: Expected a return instruction in tokio::runtime::task::raw::vtable, but found: " << *inst << "\n";
+        }
+        return true;
+    }
+    return false; // Not handled here, return false to indicate no special handling
+}
+
+// for detail, see info_tokio.txt
+bool PointerAnalysis::handleTokioTask(CallBase &CB, llvm::Function *calledFn)
+{
+    if (calledFn->arg_empty())
+        return false; // Not enough arguments to handle
+
+    std::string demangledName = getDemangledName(calledFn->getName().str());
+    if (demangledName == "tokio::task::spawn::spawn")
+    {
+        llvm::Function *fn = CurrentCGNode->function;
+        // if (DebugMode)
+        errs() << "Found " << fn->getName() << " calls tokio::task::spawn::spawn, is spawning tokio task.\n";
+
+        // Handle tokio task preparation
+        llvm::Value *task = CB.getArgOperand(0); // 1st argument is the pointer with all task info
+        Node *taskNode = getOrCreateNode(task, CurrentContext);
+        if (!taskNode)
+            return false; // Skip if node cannot be created
+
+        // if (DebugMode)
+        errs() << "\t\tTask: " << *task << " # of uses = " << task->getNumUses() << "\n";
+        // iterate the use of task to find the use that is a CallBase but not CB
+        llvm::CallBase *call2parent = nullptr;
+        for (auto &use : task->uses())
+        {
+            if (auto *call = dyn_cast<CallBase>(use.getUser()))
+            {
+                if (call != &CB)
+                {
+                    call2parent = call; // Found the call that uses the task pointer
+                    // if (DebugMode)
+                    errs() << "\t\tFound call to the fn to prepare spawn task: " << *call2parent << "\n";
+                    break;
+                }
+            }
+        }
+
+        if (call2parent)
+        {
+            // this is the function that prepares the spawned task
+            std::string parentName = call2parent->getCalledFunction()->getName().str();
+            // parentName + closure is the function run by the spawned task, now we find the closure
+            // Remove trailing hash if present (e.g., 17he2469db56cab90c3E from _ZN4demo16spawn_user_query17he2469db56cab90c3E)
+            parentName = stripRustHash(parentName);
+
+            errs() << "\t\tParent function name (stripped): " << parentName << "\n";
+
+            // Now search for a function in the module whose name starts with parentName and contains "closure"
+            Function *closureFn = nullptr;
+            for (auto &F : M)
+            {
+                std::string fname = F.getName().str();
+                if (fname.find(parentName) == 0 && fname.find("closure") != std::string::npos)
+                {
+                    closureFn = &F;
+                    errs() << "\t\tFound closure function: " << closureFn->getName() << "\n";
+                    break;
+                }
+            }
+            if (!closureFn)
+            {
+                errs() << "Warning: no closure function found for parent: " << parentName << "\n";
+                return true;
+            }
+
+            // Now we have the closure function, we can add an assign constraint for the 1st parameter of spawn and the 1st non-sret parameter of closure, the 2nd parameter is unimportant
+            if (closureFn->arg_size() == 2)
+            {
+                errs() << "\t\tClosure function has 2 parameters: " << closureFn->getName() << "\n";
+                llvm::Argument *closure = closureFn->getArg(0);
+                Node *closureNode = getOrCreateNode(closure, CurrentContext);
+                if (!closureNode || !taskNode)
+                    return false; // Skip if nodes cannot be created
+                addConstraint({Assign, taskNode->id, closureNode->id});
+            }
+            else if (closureFn->arg_size() == 3)
+            {
+                errs() << "\t\tClosure function has 3 parameters: " << closureFn->getName() << "\n";
+                llvm::Argument *closure = closureFn->getArg(1); // 2nd parameter is the closure
+                Node *closureNode = getOrCreateNode(closure, CurrentContext);
+                if (!closureNode || !taskNode)
+                    return false; // Skip if nodes cannot be created
+                addConstraint({Assign, taskNode->id, closureNode->id});
+
+                // add constraints for return value
+            }
+            else
+            {
+                errs() << "Warning: closure function has " << closureFn->arg_size() << " parameters: " << closureFn->getName() << "\n";
+                return true; // No closure to link to
+            }
+
+            // link tokio::task::spawn to the closure function
+            CGNode closureCGNode = callGraph.getOrCreateNode(closureFn, CurrentContext);
+            callGraph.addEdge(*CurrentCGNode, closureCGNode);
+
+            AddToFunctionWorklist(&closureCGNode); // Add closure function to the worklist
+        }
+
+        return true;
+    }
+
+    return false;
+}
+
 // TODO: more declarations to handle, e.g., locks
 // no need to add to worklist, F is a library function, already simulate the constraints here
-void PointerAnalysis::handleDeclaredFunction(CallBase &CB, Function *F, CGNode realCaller)
+void PointerAnalysis::handleSpecialDeclaredFunction(CallBase &CB, Function *F, CGNode realCaller)
 {
     std::string name = F->getName().str(); // original name
 
@@ -949,8 +1109,8 @@ void PointerAnalysis::handleDeclaredFunction(CallBase &CB, Function *F, CGNode r
             errs() << "Processing declared function: " << name << "\n";
 
         // declare void @llvm.memcpy.*(dest, src, size, is_volatile)
-        Value *arg1 = CB.getArgOperand(0); // writeonly
-        Value *arg2 = CB.getArgOperand(1); // readonly
+        Value *arg1 = CB.getArgOperand(0)->stripPointerCasts(); // writeonly
+        Value *arg2 = CB.getArgOperand(1)->stripPointerCasts(); // readonly
         if (arg1->getType()->isPointerTy() && arg2->getType()->isPointerTy())
         {
             Node *srcNode = getOrCreateNode(arg2, CurrentContext);
@@ -973,8 +1133,8 @@ void PointerAnalysis::handleDeclaredFunction(CallBase &CB, Function *F, CGNode r
             errs() << "Processing declared function: " << demangledName << "\n";
 
         // the IR pattern can be found in channel-test-full.ll and demo-r68_llvm17_map.ll in examples folder
-        Value *dataPtr = CB.getArgOperand(2); // 3rd: dataPtr
-        Value *vtable = CB.getArgOperand(3);  // 4th: invoked fn through vtable
+        Value *dataPtr = CB.getArgOperand(2)->stripPointerCasts(); // 3rd: dataPtr
+        Value *vtable = CB.getArgOperand(3)->stripPointerCasts();  // 4th: invoked fn through vtable
         if (dataPtr->getType()->isPointerTy() && vtable->getType()->isPointerTy())
         {
             // Handle indirect calls: add constraints for vtable
@@ -983,6 +1143,25 @@ void PointerAnalysis::handleDeclaredFunction(CallBase &CB, Function *F, CGNode r
             addConstraint({Invoke, vtableNode->id, callNode->id});
         }
     }
+    // else if (demangledName == "<alloc::sync::Arc<T> as core::ops::deref::Deref>::deref")
+    // {
+    //     if (DebugMode)
+    //         errs() << "Processing declared function: " << demangledName << "\n";
+
+    //     // e.g.,
+    //     // ; invoke <alloc::sync::Arc<T> as core::ops::deref::Deref>::deref
+    //     //   %_18 = invoke align 8 ptr @"_ZN69_$LT$alloc..sync..Arc$LT$T$GT$$u20$as$u20$core..ops..deref..Deref$GT$5deref17hdca1703be48d76b6E"(ptr align 8 %me)
+    //     //             to label %bb5 unwind label %cleanup3, !dbg !18187
+    //     // we will simply add an assign constraint from the data pointer to the return value
+    //     // this is a common pattern in Rust, where Arc<T> derefs to T
+    //     Value *dataPtr = CB.getArgOperand(0); // 1st and only: dataPtr
+    //     if (dataPtr->getType()->isPointerTy())
+    //     {
+    //         Node *dataPtrNode = getOrCreateNode(dataPtr, CurrentContext);
+    //         Node *callNode = getOrCreateNode(&CB, CurrentContext);
+    //         addConstraint({Invoke, dataPtrNode->id, callNode->id});
+    //     }
+    // }
 }
 
 void PointerAnalysis::visitInstruction(Instruction &I)
@@ -1015,8 +1194,7 @@ void PointerAnalysis::addConstraint(const Constraint &constraint)
     switch (constraint.type)
     {
     case Assign:
-        if (constraint.lhs_id != UINT64_MAX)
-            DU[constraint.lhs_id].push_back(constraint);
+        DU[constraint.lhs_id].push_back(constraint);
         break;
 
     case AddressOf:
@@ -1128,9 +1306,6 @@ void PointerAnalysis::solveConstraints()
         // Process all constraints in the worklist
         for (const auto &constraint : tmpWorklist)
         {
-            if (constraint.rhs_id == UINT64_MAX)
-                continue;
-
             switch (constraint.type)
             {
             case Assign:
@@ -1169,6 +1344,61 @@ void PointerAnalysis::solveConstraints()
     }
 }
 
+bool PointerAnalysis::isTypeCompatible(Type *ptrType, Type *allocaType)
+{
+    // Ensure ptrType is indeed a pointer; actually this should have checked already
+    if (!ptrType->isPointerTy())
+    {
+        if (DebugMode)
+        {
+            errs() << "[TypeCheck] Not a pointer type: ";
+            ptrType->print(errs());
+            errs() << "\n";
+        }
+        return false;
+    }
+
+    // Allow compatible struct types (e.g., named vs anonymous struct)
+    if (ptrType->isStructTy() && allocaType->isStructTy())
+    {
+        StructType *S1 = dyn_cast<StructType>(ptrType);
+        StructType *S2 = dyn_cast<StructType>(allocaType);
+
+        // Allow unnamed structs of the same layout
+        if (!S1->hasName() && !S2->hasName() && S1->isLayoutIdentical(S2))
+            return true;
+
+        // Allow name match for named structs
+        if (S1->hasName() && S2->hasName() && S1->getName() == S2->getName())
+            return true;
+    }
+
+    // Handle arrays: allow pointer to element type
+    if (allocaType->isArrayTy() &&
+        ptrType == cast<ArrayType>(allocaType)->getElementType())
+        return true;
+
+    // Allow some flexibility in pointer-to-any (like i8*)
+    if (ptrType->isIntegerTy(8))
+        // Treat i8* as generic pointer
+        return true;
+
+    // Allow some flexibility when pointer type is a pointer to a pointer
+    if (ptrType->isPointerTy() && allocaType->isPointerTy())
+        return true;
+
+    // if (DebugMode)
+    {
+        errs() << "[TypeCheck] Incompatible types: ";
+        ptrType->print(errs());
+        errs() << " vs ";
+        allocaType->print(errs());
+        errs() << "\n";
+    }
+
+    return false;
+}
+
 void PointerAnalysis::processAssignConstraint(const llvm::Constraint &constraint)
 {
     if (DebugMode)
@@ -1178,27 +1408,33 @@ void PointerAnalysis::processAssignConstraint(const llvm::Constraint &constraint
 
     bool changed = false;
     auto &dst = idToNodeMap[constraint.rhs_id];
-    if (constraint.lhs_id == UINT64_MAX)
+    auto &src = idToNodeMap[constraint.lhs_id];
+
+    std::unordered_set<uint64_t> cmp = src->diff.empty() ? src->pts : src->diff;
+    for (auto target_id : cmp)
     {
-        // Allocate: Points to self
-        if (dst->pts.insert(constraint.rhs_id).second)
+        // Type check: only allow if types are compatible
+        // check the type of target_id, if its type is not the same as dst->type, skip it;
+        Node *targetNode = getNodebyID(target_id);
+        if (!targetNode || !targetNode->type || !dst->type)
         {
-            dst->diff.insert(constraint.rhs_id);
-            changed = true; // Mark that we made a change
+            if (DebugMode)
+                errs() << "Skipping assign due to missing type: " << *src->value << " -> " << *dst->value << "\n";
+            continue;
         }
-    }
-    else
-    {
-        auto &src = idToNodeMap[constraint.lhs_id];
-        std::unordered_set<uint64_t> cmp = src->diff.empty() ? src->pts : src->diff;
-        for (auto target_id : cmp)
+
+        if (!isTypeCompatible(dst->type, targetNode->type))
         {
-            if (dst->pts.insert(target_id).second)
-            {
-                // new id into dst->pts
-                dst->diff.insert(target_id); // Mark as changed
-                changed = true;              // Mark that we made a change
-            }
+            if (DebugMode)
+                errs() << "Skipping assign due to non-compatible types: " << *src->value << " -> " << *dst->value << "\n";
+            continue;
+        }
+
+        if (dst->pts.insert(target_id).second)
+        {
+            // new id into dst->pts
+            dst->diff.insert(target_id); // Mark as changed
+            changed = true;              // Mark that we made a change
         }
     }
 
@@ -1239,11 +1475,6 @@ void PointerAnalysis::processAddressOfConstraint(const llvm::Constraint &constra
     if (DebugMode)
     {
         errs() << "Processing AddressOf constraint: " << constraint << "\n";
-    }
-
-    if (constraint.lhs_id == UINT64_MAX)
-    {
-        return;
     }
 
     bool changed = false;
@@ -1354,8 +1585,8 @@ void PointerAnalysis::processStoreConstraint(const llvm::Constraint &constraint)
     for (auto obj_id : cmp)
     {
         Node *objNode = getNodebyID(obj_id);
-        if (!objNode)
-            continue; // Skip if target not found
+        if (!objNode || !objNode->isAlloc()) // Ensure objNode is an AllocNode
+            continue;                        // Skip if target not found
         Node *fieldPtrNode = getOrCreateNode(objNode->value, objNode->context, constraint.offsets);
         if (!fieldPtrNode)
             continue; // Skip if node cannot be created
@@ -1806,13 +2037,36 @@ void PointerAnalysis::printTaintedNodes(std::ofstream &outFile)
             outFile << "\tNode ID: " << id << " (not found)\n";
             continue;
         }
+
+        llvm::Value *value = node->value;
         // i dont want to print the pts of each node, but the remaining information
         outFile << "\tNode ID=" << node->id << ", Value=";
         std::string s;
         llvm::raw_string_ostream rso(s);
-        rso << *node->value;
+        rso << *value;
         rso.flush();
-        outFile << s << "\n";
+        outFile << s << ", ";
+
+        if (auto *inst = llvm::dyn_cast<llvm::Instruction>(value))
+        {
+            llvm::Function *func = inst->getParent()->getParent();
+            if (func)
+            {
+                outFile << " (from function " << func->getName().str() << ")";
+            }
+        }
+        else if (auto *arg = llvm::dyn_cast<llvm::Argument>(value))
+        {
+            if (auto *func = arg->getParent())
+            {
+                outFile << " (arg of function " << func->getName().str() << ")";
+            }
+        }
+        else
+        {
+            outFile << " (no function context)";
+        }
+        outFile << "\n";
 
         // // the following prints out the full information of the node
         // std::string s;

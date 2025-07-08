@@ -7,3 +7,4 @@ extern llvm::cl::opt<unsigned> KValue;
 extern llvm::cl::opt<bool> DebugMode;
 extern llvm::cl::opt<bool> HandleIndirectCalls;
 extern llvm::cl::opt<unsigned> MaxVisit;
+extern llvm::cl::opt<bool> OutputToFile;
