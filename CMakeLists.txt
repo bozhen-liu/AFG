@@ -11,16 +11,36 @@ message(STATUS "Using LLVMConfig.cmake in: ${LLVM_DIR}")
 include_directories(${LLVM_INCLUDE_DIRS} include)
 add_definitions(${LLVM_DEFINITIONS})
 
-# Sources
-add_library(PointerAnalysisPass MODULE
+# Enable testing for CTest support
+enable_testing()
+
+# Core analysis library (STATIC for testing)
+add_library(PointerAnalysisCore STATIC
   src/PointerAnalysis.cpp
-  src/PointerAnalysisPass.cpp
   src/KCallsitePointerAnalysis.cpp
   src/CallGraph.cpp
   src/ChannelSemantics.cpp
   src/OriginPointerAnalysis.cpp
   src/Flags.cpp
+  src/nodes/AllocNode.cpp
+  src/FieldSensitiveMemModel.cpp
+)
+set_target_properties(PointerAnalysisCore PROPERTIES POSITION_INDEPENDENT_CODE ON)
+target_include_directories(PointerAnalysisCore PUBLIC include)
+
+# Link core library against LLVM and nlohmann_json
+target_link_libraries(PointerAnalysisCore PUBLIC LLVM nlohmann_json::nlohmann_json)
+
+# Pass library (MODULE for LLVM plugin loading)
+add_library(PointerAnalysisPass MODULE
+  src/PointerAnalysisPass.cpp
 )
 
-# Link against LLVM libraries and nlohmann_json
-target_link_libraries(PointerAnalysisPass PRIVATE LLVM nlohmann_json::nlohmann_json)
+# Link pass against core library
+target_link_libraries(PointerAnalysisPass PRIVATE PointerAnalysisCore)
+
+# Define the project source directory for use in code
+add_definitions(-DPROJECT_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
+
+# Add tests subdirectory
+add_subdirectory(tests)

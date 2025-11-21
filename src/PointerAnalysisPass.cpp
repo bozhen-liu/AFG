@@ -47,48 +47,14 @@ namespace
             std::chrono::duration<double> elapsed = end - start;
 
             if (OutputToFile)
-            {                                                   // Output the results to a file
-                std::ofstream outFile(PA->getOutputFileName()); // Open the output file
-                if (outFile.is_open())
-                {
-                    errs() << "Writing pointer analysis results to " << PA->getOutputFileName() << " ...\n";
-
-                    if (DebugMode)
-                    { // Print the names of visited functions
-                        outFile << "Visited Functions:\n";
-                        for (const auto *func : PA->getVisitedFunctions())
-                        {
-                            if (func)
-                            {
-                                outFile << "  - " << func->getName().str() << "\n";
-                            }
-                        }
-                    }
-
-                    // Print the call graph to the file
-                    PA->getCallGraph().printCG(outFile);
-                    // Iterate through the points-to map and print the results
-                    PA->printPointsToMap(outFile);
-
-                    if (PA->TaintingEnabled)
-                    {
-                        PA->printTaintedNodes(outFile);
-                    }
-
-                    outFile.close(); // Close the file after writing
-                }
-                else
-                {
-                    errs() << "Error: Could not open file for writing results.\n";
-                }
+            {
+                PA->outputToFile(); // Output the results to a file
             }
 
             errs() << "=== Pointer Analysis Time ===\n"
                    << elapsed.count() << " seconds\n";
 
             PA->printStatistics(); // Print statistics to stderr
-
-            PA->clear(); // Clear the analysis results
 
             // Indicate that the pass does not modify the IR
             return PreservedAnalyses::all();

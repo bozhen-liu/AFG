@@ -1,0 +1,5 @@
+{
+    "tagged_objects": [
+        "%tainted_data = alloca i32, align 4"
+    ]
+}

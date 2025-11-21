@@ -14,8 +14,10 @@
 #include <functional>
 #include <deque>
 #include "CallGraph.h"
-#include "ChannelSemantics.h"
 #include "Flags.h"
+#include "nodes/Node.h"
+#include "nodes/AllocNode.h"
+#include "FieldSensitiveMemModel.h"
 
 namespace std
 {
@@ -32,15 +34,40 @@ namespace std
     };
 
     template <>
-    struct hash<std::tuple<llvm::Value *, llvm::Context, std::vector<uint64_t>, bool>>
+    struct hash<std::tuple<llvm::Value *, llvm::Context>>
     {
-        std::size_t operator()(const std::tuple<llvm::Value *, llvm::Context, std::vector<uint64_t>, bool> &t) const noexcept
+        std::size_t operator()(const std::tuple<llvm::Value *, llvm::Context> &t) const noexcept
+        {
+            std::size_t h1 = std::hash<llvm::Value *>()(std::get<0>(t));
+            std::size_t h2 = std::hash<llvm::Context>()(std::get<1>(t));
+            return h1 ^ (h2 << 1);
+        }
+    };
+
+    template <>
+    struct hash<std::tuple<llvm::Value *, llvm::Context, std::vector<uint64_t>>>
+    {
+        std::size_t operator()(const std::tuple<llvm::Value *, llvm::Context, std::vector<uint64_t>> &t) const noexcept
         {
             std::size_t h1 = std::hash<llvm::Value *>()(std::get<0>(t));
             std::size_t h2 = std::hash<llvm::Context>()(std::get<1>(t));
             std::size_t h3 = std::hash<std::vector<uint64_t>>()(std::get<2>(t));
-            std::size_t h4 = std::hash<bool>()(std::get<3>(t));
-            return h1 ^ (h2 << 1) ^ (h3 << 2) ^ (h4 << 3);
+            return h1 ^ (h2 << 1) ^ (h3 << 2);
+        }
+    };
+
+    template <>
+    struct hash<std::pair<uint64_t, std::vector<uint64_t>>>
+    {
+        std::size_t operator()(const std::pair<uint64_t, std::vector<uint64_t>> &p) const
+        {
+            std::size_t h1 = std::hash<uint64_t>{}(p.first);
+            std::size_t h2 = 0;
+            for (auto val : p.second)
+            {
+                h2 ^= std::hash<uint64_t>{}(val) + 0x9e3779b9 + (h2 << 6) + (h2 >> 2);
+            }
+            return h1 ^ (h2 << 1);
         }
     };
 }
@@ -54,327 +81,7 @@ namespace llvm
     class BitCastInst;
     class GetElementPtrInst;
     class AllocaInst;
-
-    // Forward declare ChannelSemantics
     class ChannelSemantics;
-
-    struct Node
-    {
-        uint64_t id;                      // Unique node ID
-        llvm::Value *value;               // The LLVM value
-        Context context;                  // The context
-        std::vector<uint64_t> offsets;    // For field-sensitive analysis, stores the offsets of the fields
-        std::unordered_set<uint64_t> pts; // Points-to set (final)
-
-        llvm::Type *type; // type of the value (or the type the pointer can hold), used for type checking
-
-        // used during solving and propogating
-        std::unordered_set<uint64_t> diff; // newly added nodes into points-to set; will be added to pts after propogation and reset for next iteration
-        Node *alias = nullptr;             // Union-find for aliasing: used when actual parameter is used as return value with GEP, store and memcpy, only happens on the 1st param e.g.,
-        // define internal void @"_ZN3std4sync4mpmc4list16Channel$LT$T$GT$3new17h9fbe3e677e1b4f13E"(ptr sret(%"std::sync::mpmc::list::Channel<i32>") %0) ...
-        //   %7 = getelementptr inbounds %"std::sync::mpmc::list::Channel<i32>", ptr %0, i32 0, i32 2, !dbg !5323
-        //   call void @llvm.memcpy.p0.p0.i64(ptr align 128 %7, ptr align 128 %_6, i64 128, i1 false), !dbg !5323
-
-        Node *findAliasRoot()
-        {
-            if (!alias)
-                return this;
-            return alias = alias->findAliasRoot();
-        }
-
-        void unionAlias(Node *other)
-        {
-            Node *root1 = this->findAliasRoot();
-            Node *root2 = other->findAliasRoot();
-            if (root1 == root2)
-                return; // Prevents cycles!
-            root2->alias = root1;
-            // Merge points-to sets as needed
-        }
-
-        // Constructor
-        Node(int nodeId, llvm::Value *v, Context ctx = Everywhere, std::vector<uint64_t> idx = {}) : id(nodeId), value(v), type(v ? v->getType() : nullptr), context(ctx), offsets(std::move(idx)) {}
-
-        // Equality operator for unordered_map/unordered_set
-        bool operator==(const Node &other) const
-        {
-            return value == other.value && context == other.context && id == other.id && offsets == other.offsets;
-        }
-
-        virtual bool isAlloc() const
-        {
-            return false; // Base Node is not an allocation node
-        }
-
-        virtual void print(llvm::raw_ostream &os) const
-        {
-            os << "[Node id=" << id << ", value=";
-            if (value)
-            {
-                if (auto f = dyn_cast<Function>(value))
-                    os << f->getName();
-                else
-                    value->print(os);
-            }
-            else
-                os << "null";
-            // os << ", type=";
-            // if (type)
-            //     type->print(os, false);
-            // else
-            //     os << "null";
-            // os << ", ";
-            if (auto *inst = llvm::dyn_cast<llvm::Instruction>(value))
-            {
-                llvm::Function *func = inst->getParent()->getParent();
-                if (func)
-                {
-                    os << " (from function " << func->getName() << ")";
-                }
-            }
-            else if (auto *arg = llvm::dyn_cast<llvm::Argument>(value))
-            {
-                if (auto *func = arg->getParent())
-                {
-                    os << " (arg of function " << func->getName() << ")";
-                }
-            }
-            else if (auto *func = llvm::dyn_cast<llvm::Function>(value))
-            {
-                os << " (ret of function " << func->getName() << ")";
-            }
-            else
-            {
-                os << " (no function context)";
-            }
-            os << ", context=";
-            os << "[";
-            if (context == Everywhere)
-            {
-                os << "Everywhere";
-            }
-            else
-            {
-
-                for (auto it = context.begin(); it != context.end(); ++it)
-                {
-                    if (*it)
-                        (*it)->print(os);
-                    else
-                        os << "null";
-                    if (std::next(it) != context.end())
-                        os << ", ";
-                }
-            }
-            os << "]";
-            if (!offsets.empty())
-            {
-                os << ", indices=["; // or fields
-                for (size_t i = 0; i < offsets.size(); ++i)
-                {
-                    os << offsets[i];
-                    if (i + 1 < offsets.size())
-                        os << ",";
-                }
-                os << "]";
-            }
-            os << ", pts=[";
-            if (pts.empty())
-            {
-                os << "empty";
-            }
-            else
-            {
-                for (auto it = pts.begin(); it != pts.end(); ++it)
-                {
-                    os << *it;
-                    if (std::next(it) != pts.end())
-                        os << ",";
-                }
-            }
-            os << "]";
-            if (!diff.empty())
-            {
-                os << ", diff=[";
-                for (auto it = diff.begin(); it != diff.end(); ++it)
-                {
-                    os << *it;
-                    if (std::next(it) != diff.end())
-                        os << ",";
-                }
-                os << "]";
-            }
-            os << "]";
-        }
-    };
-
-    struct AllocNode : public Node
-    {
-        llvm::Type *type; // allocated type, used for type checking
-
-        // Constructor: call base Node constructor
-        AllocNode(int nodeId, llvm::Value *v, Context ctx = Everywhere, std::vector<uint64_t> idx = {})
-            : Node(nodeId, v, ctx, std::move(idx))
-        {
-            if (auto *allocaInst = dyn_cast<AllocaInst>(v))
-            {
-                type = allocaInst->getAllocatedType();
-
-                if (DebugMode)
-                {
-                    errs() << "AllocNode created with id=" << id << ", value=" << v << "\n";
-
-                    if (auto *structType = dyn_cast<StructType>(type))
-                    { // If it's a named struct
-                        if (structType->hasName())
-                        {
-                            errs() << "Struct name: " << structType->getName() << "\n";
-
-                            // inspect fields
-                            for (unsigned i = 0; i < structType->getNumElements(); ++i)
-                            {
-                                Type *field = structType->getElementType(i);
-                                errs() << "  Field " << i << ": ";
-                                field->print(errs());
-                                errs() << "\n";
-                            }
-                        }
-                        else
-                        { // is anonymous struct
-                            errs() << "Anonymous struct with " << structType->getNumElements() << " elements:\n";
-                            for (unsigned i = 0; i < structType->getNumElements(); ++i)
-                            {
-                                Type *field = structType->getElementType(i);
-                                errs() << "  Field " << i << ": ";
-                                field->print(errs());
-                                errs() << "\n";
-                            }
-                        }
-                    }
-                    else if (auto *AT = dyn_cast<ArrayType>(type))
-                    {
-                        errs() << "Array of " << AT->getNumElements() << " elements of type: ";
-                        AT->getElementType()->print(errs());
-                        errs() << "\n";
-                    }
-                    else if (type->isPointerTy())
-                    {
-                        errs() << "Pointer to type: ";
-                        type->print(errs());
-                        errs() << "\n";
-                    }
-                    else if (type->isIntegerTy())
-                    {
-                        errs() << "Integer type: i" << cast<IntegerType>(type)->getBitWidth() << "\n";
-                    }
-                    else if (type->isFloatingPointTy())
-                    {
-                        errs() << "Floating point type";
-                    }
-                    else
-                    {
-                        errs() << "Other type: ";
-                        type->print(errs());
-                        errs() << "\n";
-                    }
-                }
-            }
-        }
-
-        bool isAlloc() const override
-        {
-            return true; // AllocNode is always an allocation node
-        }
-
-        // You can override print to include alloc info
-        void print(llvm::raw_ostream &os) const override
-        {
-            os << "[AllocNode id=" << id << ", value=";
-            if (value)
-            {
-                if (auto f = dyn_cast<Function>(value))
-                    os << f->getName();
-                else
-                    value->print(os);
-            }
-            else
-                os << "null";
-            // os << ", type=";
-            // if (type)
-            //     type->print(os, false);
-            // else
-            //     os << "null";
-            // os << ", ";
-            if (auto *inst = llvm::dyn_cast<llvm::Instruction>(value))
-            {
-                llvm::Function *func = inst->getParent()->getParent();
-                if (func)
-                {
-                    os << " (from function " << func->getName() << ")";
-                }
-            }
-            // else if (auto *arg = llvm::dyn_cast<llvm::Argument>(value))
-            // {
-            //     if (auto *func = arg->getParent())
-            //     {
-            //         os << " (arg of function " << func->getName() << ")";
-            //     }
-            // }
-            // else if (auto *func = llvm::dyn_cast<llvm::Function>(value))
-            // {
-            //     os << " (ret of function " << func->getName() << ")";
-            // }
-            else
-            {
-                os << " (no function context)";
-            }
-            os << ", context=";
-            os << "[";
-            if (context == Everywhere)
-            {
-                os << "Everywhere";
-            }
-            else
-            {
-
-                for (auto it = context.begin(); it != context.end(); ++it)
-                {
-                    if (*it)
-                        (*it)->print(os);
-                    else
-                        os << "null";
-                    if (std::next(it) != context.end())
-                        os << ", ";
-                }
-            }
-            os << "]";
-            if (!offsets.empty())
-            {
-                os << ", indices=["; // or fields
-                for (size_t i = 0; i < offsets.size(); ++i)
-                {
-                    os << offsets[i];
-                    if (i + 1 < offsets.size())
-                        os << ",";
-                }
-                os << "]";
-            }
-        }
-    };
-
-    // Overload operator<< for Node as a free function
-    inline llvm::raw_ostream &operator<<(llvm::raw_ostream &os, const llvm::Node &node)
-    {
-        node.print(os);
-        return os;
-    }
-
-    // Overload operator<< for AllocNode as a free function
-    inline llvm::raw_ostream &operator<<(llvm::raw_ostream &os, const llvm::AllocNode &node)
-    {
-        node.print(os);
-        return os;
-    }
 
     enum ConstraintType
     {
@@ -487,18 +194,7 @@ namespace llvm
                 llvm::errs() << "PointerAnalysis initialized with module: " << M.getName() << "\n";
         }
 
-        void analyze();
-        const CallGraph &getCallGraph() const { return callGraph; }
-        const std::unordered_set<Function *> &getVisitedFunctions() const
-        {
-            return Visited;
-        }
-        const std::string getOutputFileName() const { return outputFile; }
-
-        const void printStatistics();
-        void printPointsToMap(std::ofstream &os) const;
-
-        void clear()
+        ~PointerAnalysis()
         {
             idToNodeMap.clear();
             Visited.clear();
@@ -506,17 +202,51 @@ namespace llvm
             FunctionWorklist.clear();
             vtableToFunctionMap.clear();
             ValueContextToNodeMap.clear();
+            ValueContextToAllocNodeMap.clear();
             callGraph.clear();
+            DU.clear();
+
+            channelSemantics = nullptr;
+
+            delete fieldModel;
+            fieldModel = nullptr;
+            AllocNode::fieldModel = nullptr;
+
+            if (DebugMode)
+                llvm::errs() << "PointerAnalysis destroyed\n";
         }
 
-        std::vector<Constraint> Worklist; // Worklist for new constraints to visit
+        void analyze();
+        const CallGraph &getCallGraph() const { return callGraph; }
+        const std::unordered_set<Function *> &getVisitedFunctions() const
+        {
+            return Visited;
+        }
+        const std::unordered_map<uint64_t, Node *> &getIdToNodeMap() const { return idToNodeMap; }
+        const std::string getOutputFileName() const { return outputFile; }
 
-        Node *getOrCreateNode(llvm::Value *value, Context context = Everywhere, std::vector<uint64_t> indices = {}, bool isAlloc = false); // create or find node: ctx == Everywhere
-        Node *getNodebyID(uint64_t id);                                                                                                    // Get node by ID
-        virtual Context getContext(Context context = Everywhere, const Value *newCallSite = nullptr);
-        virtual void processInstruction(Instruction &I, CGNode *cgnode);
+        const void outputToFile(); // Output the results to a file
+        const void printStatistics();
+        void printPointsToMap(std::ofstream &os) const;
+
+        std::vector<Constraint> Worklist; // Worklist for new constraints to visit
+        virtual Context getContext(Context context = Everywhere, const Value *newCallSite = nullptr) { return Everywhere; }
+        Node *getNodebyID(uint64_t id);                                                                              // Get node by ID
+        Node *getOrCreateNode(llvm::Value *value, Context context = Everywhere, std::vector<uint64_t> indices = {}); // create or find pointer node: ctx == Everywhere
+        AllocNode *getOrCreateAllocNode(llvm::Value *value, Context context = Everywhere);                           // create or find alloc node
+        AllocType getAllocTypeFromValue(llvm::Value *value);                                                         // Helper function to determine AllocType from llvm::Value
+
+        // Field-sensitive memory model related
+        FieldSensitiveMemModel *fieldModel;
+        void initializeFieldSensitiveModel();
 
         // Visitor methods
+        virtual void processInstruction(Instruction &I, CGNode *cgnode)
+        {
+            CurrentCGNode = cgnode;
+            CurrentContext = getContext(cgnode->context, &I);
+            visit(I); // Will use base class visit* unless overridden here
+        }
         void visitStoreInst(StoreInst &I);
         void visitLoadInst(LoadInst &I);
         virtual void visitAllocaInst(AllocaInst &I);
@@ -542,8 +272,9 @@ namespace llvm
         bool handleRustTry(CallBase &CB, Function *F);                                                 // handle __rust_try
         void handleSpecialDeclaredFunction(CallBase &CI, Function *F, CGNode realCaller = NullCGNode); // Handle certain declared functions: call invoked through vtable needs realCaller
 
-        ChannelSemantics *channelSemantics; // Channel semantics integration
-        void setChannelSemantics(ChannelSemantics *cs) { channelSemantics = cs; }
+        // Channel semantics integration
+        ChannelSemantics *channelSemantics;
+        void initializeChannelSemantics();
 
         void printTaintedNodes(std::ofstream &outFile);
 
@@ -557,8 +288,9 @@ namespace llvm
         std::unordered_map<CGNode, int> VisitCount;       // Track the number of visits for each function/cgnode
         std::vector<CGNode> FunctionWorklist;             // Worklist for new functions (with context) to visit
 
-        std::unordered_map<std::tuple<llvm::Value *, Context, std::vector<uint64_t>, bool>, Node *> ValueContextToNodeMap; // Map to track Value and context pairs to Node
-        std::unordered_map<ConstantAggregate *, std::vector<Function *>> vtableToFunctionMap;                              // Map to track vtable to function mappings
+        std::unordered_map<std::tuple<llvm::Value *, Context, std::vector<uint64_t>>, Node *> ValueContextToNodeMap; // Map to track Value and context pairs to Node
+        std::unordered_map<std::tuple<llvm::Value *, Context>, AllocNode *> ValueContextToAllocNodeMap;              // Map to track Value and context pairs to AllocNode
+        std::unordered_map<ConstantAggregate *, std::vector<Function *>> vtableToFunctionMap;                        // Map to track vtable to function mappings
 
         std::vector<llvm::Function *> getVtable(GlobalVariable *GV); // compute vtable's functions and store to vtableToFunctionMap
         bool excludeFunctionFromAnalysis(Function *F);               // Exclude certain functions from analysis, e.g., llvm.dbg.declare
@@ -612,4 +344,4 @@ namespace llvm
 
 } // namespace llvm
 
-#endif
+#endif // POINTER_ANALYSIS_H

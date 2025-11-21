@@ -1,9 +1,10 @@
 #include "PointerAnalysis.h"
+#include "ChannelSemantics.h"
 #include "llvm/IR/Instructions.h"
 #include "llvm/IR/Module.h"
 #include "llvm/IR/Constants.h"
 #include "llvm/Support/raw_ostream.h"
-#include <nlohmann/json.hpp> // Include a JSON library like nlohmann/json
+#include <nlohmann/json.hpp>
 #include <fstream>
 #include "llvm/Support/Path.h"
 #include <llvm/ADT/SmallString.h>
@@ -27,7 +28,9 @@ void PointerAnalysis::analyze()
     if (parseTaintConfig(M))
         TaintingEnabled = true;
 
-    channelSemantics = new ChannelSemantics(this); // Initialize channel semantics
+    initializeChannelSemantics();
+    initializeFieldSensitiveModel();
+
     mainFn = parseMainFn(M);
     if (!mainFn)
     {
@@ -38,6 +41,32 @@ void PointerAnalysis::analyze()
     onthefly(M);
 
     errs() << "Pointer analysis completed.\n";
+
+    // Print field-sensitive model statistics if debug mode
+    if (DebugMode)
+        fieldModel->printFieldMap();
+}
+
+void PointerAnalysis::initializeChannelSemantics()
+{
+    if (!channelSemantics)
+    {
+        channelSemantics = new ChannelSemantics(this);
+        if (DebugMode)
+            errs() << "Channel semantics initialized\n";
+    }
+}
+
+void PointerAnalysis::initializeFieldSensitiveModel()
+{
+    if (!fieldModel)
+    {
+        fieldModel = new FieldSensitiveMemModel(this);
+        AllocNode::fieldModel = fieldModel;
+
+        if (DebugMode)
+            errs() << "Field-sensitive memory model initialized\n";
+    }
 }
 
 llvm::Function *PointerAnalysis::parseMainFn(Module &M)
@@ -128,8 +157,11 @@ llvm::Function *PointerAnalysis::parseMainFn(Module &M)
 
     if (!realMainFn)
     {
-        errs() << "No real main function found through lang_start pattern.\n";
-        errs() << "Falling back to looking for any function with 'main' in the name.\n";
+        if (DebugMode)
+        {
+            errs() << "No real main function found through lang_start pattern.\n";
+            errs() << "Falling back to looking for any function with 'main' in the name.\n";
+        }
 
         // Fallback: look for any function with "main" in the name
         for (Function &F : M)
@@ -159,9 +191,7 @@ void PointerAnalysis::onthefly(Module &M)
 {
     // Global variables can store pointers and may be accessed by multiple functions
     for (GlobalVariable &GV : M.globals())
-    {
         processGlobalVar(GV);
-    }
 
     // Process functions
     CGNode mainNode = callGraph.getOrCreateNode(mainFn, Everywhere);
@@ -191,6 +221,45 @@ void PointerAnalysis::onthefly(Module &M)
         if (DebugMode)
             errs() << "Constraints solved.\n"
                    << "Function worklist size (loc3): " << FunctionWorklist.size() << "\n";
+    }
+}
+
+// Process global variables and create alloc nodes for them
+void PointerAnalysis::processGlobalVar(GlobalVariable &GV)
+{
+    if (DebugMode)
+        errs() << "Processing global variable: " << GV << "\n";
+
+    // Create field-sensitive allocation structure for global variables
+    AllocNode *globalAllocNode = getOrCreateAllocNode(&GV, Everywhere);
+
+    // Create a pointer node that represents the global variable itself
+    Node *globalPtrNode = getOrCreateNode(&GV, Everywhere);
+
+    if (!globalAllocNode || !globalPtrNode)
+        return;
+
+    // The global variable pointer points to the global allocation
+    addConstraint({AddressOf, globalAllocNode->id, globalPtrNode->id});
+
+    if (DebugMode)
+    {
+        errs() << "Added global variable \"" << GV.getName() << "\" to the worklist.\n";
+    }
+
+    // If the global variable has an initializer, process it
+    if (GV.hasInitializer())
+    {
+        Constant *initializer = GV.getInitializer();
+        if (isa<GlobalVariable>(initializer) || isa<Function>(initializer))
+        {
+            Node *initNode = getOrCreateNode(initializer, Everywhere);
+            if (initNode)
+            {
+                // The global variable is initialized to point to this value
+                addConstraint({Assign, initNode->id, globalAllocNode->id});
+            }
+        }
     }
 }
 
@@ -301,66 +370,6 @@ void PointerAnalysis::visitFunction(CGNode *cgnode)
     }
 }
 
-Node *PointerAnalysis::getOrCreateNode(llvm::Value *value, Context context, std::vector<uint64_t> offsets, bool isAlloc)
-{
-    // Ignore pointers with .dbg. in their name (e.g., %ret.dbg.spill), which are for debug purposes only
-    if (isDbgPointer(value))
-    {
-        if (DebugMode)
-            errs() << "Ignoring dbg pointer: " << value->getName() << "\n";
-        return nullptr;
-    }
-
-    if (isa<GlobalVariable>(value) || isa<GlobalAlias>(value) || isa<GlobalIFunc>(value))
-    {
-        context = Everywhere; // Global variables are considered everywhere
-    }
-
-    // Check if the node already exists in the map
-    auto it = ValueContextToNodeMap.find(std::make_tuple(value, context, offsets, isAlloc));
-    if (it != ValueContextToNodeMap.end())
-    {
-        return it->second;
-    }
-    Node *node = isAlloc ? new AllocNode(nextNodeId++, value, context, offsets) : new Node(nextNodeId++, value, context, offsets);
-    idToNodeMap[node->id] = node;
-    ValueContextToNodeMap[std::make_tuple(value, context, offsets, isAlloc)] = node;
-    return node;
-}
-
-Node *PointerAnalysis::getNodebyID(uint64_t id)
-{
-    auto it = idToNodeMap.find(id);
-    if (it == idToNodeMap.end())
-    {
-        errs() << "Warning: Target ID " << id << " not found in idToNodeMap.\n";
-        return nullptr; // Skip if target not found
-    }
-    return it->second;
-}
-
-Context PointerAnalysis::getContext(Context context, const Value *newCallSite)
-{
-    return Everywhere; // Default context is Everywhere
-}
-
-void PointerAnalysis::processInstruction(Instruction &I, CGNode *cgnode)
-{
-    CurrentCGNode = cgnode;
-    CurrentContext = getContext(Everywhere, &I);
-    visit(I); // InstVisitor dispatches to the correct visit* method
-
-    // // Casts between pointers and integers can obscure pointer relationships
-    // else if (auto *ITP = dyn_cast<IntToPtrInst>(&I))
-    // {
-    //     addConstraint({Assign, nullptr, ITP}); // Unknown source
-    // }
-    // else if (auto *PTI = dyn_cast<PtrToIntInst>(&I))
-    // {
-    //     // Optional: Handle pointer-to-integer casts if needed
-    // }
-}
-
 std::vector<llvm::Function *> PointerAnalysis::getVtable(GlobalVariable *GV)
 {
     // Check if the global variable name matches the vtable naming pattern
@@ -445,20 +454,71 @@ std::vector<llvm::Function *> PointerAnalysis::getVtable(GlobalVariable *GV)
     return {}; // Return an empty vector if no vtable functions are found
 }
 
-void PointerAnalysis::processGlobalVar(GlobalVariable &GV)
+Node *PointerAnalysis::getNodebyID(uint64_t id)
 {
-    if (DebugMode)
-        errs() << "Added global variable \"" << GV << "\" to the worklist.\n";
-
-    // Check if the global variable is a pointer type
-    if (GV.getType()->isPointerTy())
+    auto it = idToNodeMap.find(id);
+    if (it == idToNodeMap.end())
     {
-        AllocNode *gvNode = static_cast<AllocNode *>(getOrCreateNode(&GV, Everywhere, {}, true));
-        Node *gvPtrNode = getOrCreateNode(&GV, getContext());
-        if (!gvNode || !gvPtrNode)
-            return;
-        addConstraint({AddressOf, gvNode->id, gvPtrNode->id}); // Points to self
+        errs() << "Warning: Target ID " << id << " not found in idToNodeMap.\n";
+        return nullptr; // Skip if target not found
     }
+    return it->second;
+}
+
+Node *PointerAnalysis::getOrCreateNode(llvm::Value *value, Context context, std::vector<uint64_t> offsets)
+{
+    // Ignore pointers with .dbg. in their name (e.g., %ret.dbg.spill), which are for debug purposes only
+    if (isDbgPointer(value))
+    {
+        if (DebugMode)
+            errs() << "Ignoring dbg pointer: " << value->getName() << "\n";
+        return nullptr;
+    }
+
+    if (isa<GlobalVariable>(value) || isa<GlobalAlias>(value) || isa<GlobalIFunc>(value))
+        context = Everywhere; // Global variables are considered everywhere
+
+    // Check if the node already exists in the map
+    auto it = ValueContextToNodeMap.find(std::make_tuple(value, context, offsets));
+    if (it != ValueContextToNodeMap.end())
+        return it->second;
+
+    Node *node = new Node(nextNodeId++, value, context, offsets);
+    idToNodeMap[node->id] = node;
+    ValueContextToNodeMap[std::make_tuple(value, context, offsets)] = node;
+
+    if (DebugMode)
+        errs() << "Created new node: " << *node << "\n";
+
+    return node;
+}
+
+AllocNode *PointerAnalysis::getOrCreateAllocNode(llvm::Value *value, Context context)
+{
+    // Ignore pointers with .dbg. in their name (e.g., %ret.dbg.spill), which are for debug purposes only
+    if (isDbgPointer(value))
+    {
+        if (DebugMode)
+            errs() << "Ignoring dbg pointer: " << value->getName() << "\n";
+        return nullptr;
+    }
+
+    // Check if the node already exists in the map
+    auto it = ValueContextToAllocNodeMap.find(std::make_tuple(value, context));
+    if (it != ValueContextToAllocNodeMap.end())
+        return dyn_cast<AllocNode>(it->second);
+
+    // Create a new AllocNode
+    AllocNode *node = new AllocNode(nextNodeId++, value, context, {});
+    idToNodeMap[node->id] = node;
+    ValueContextToAllocNodeMap[std::make_tuple(value, context)] = node;
+
+    if (DebugMode)
+    {
+        errs() << "Created new alloc node: " << *node << "\n";
+    }
+
+    return node;
 }
 
 void PointerAnalysis::visitAllocaInst(AllocaInst &AI)
@@ -466,7 +526,8 @@ void PointerAnalysis::visitAllocaInst(AllocaInst &AI)
     if (DebugMode)
         errs() << "Processing alloca: " << AI << "\n";
 
-    AllocNode *aiNode = static_cast<AllocNode *>(getOrCreateNode(&AI, getContext(), {}, true));
+    // Create field-sensitive allocation structure
+    AllocNode *aiNode = getOrCreateAllocNode(&AI, getContext());
     Node *aiPtrNode = getOrCreateNode(&AI, getContext());
     if (!aiNode || !aiPtrNode)
         return;
@@ -522,11 +583,11 @@ void PointerAnalysis::visitStoreInst(StoreInst &SI)
                     offsets.push_back(~0ULL); // Unknown index
             }
         }
-        else
-        {
-            // Not a GEP — treat as access to base field (e.g., offset 0)
-            offsets.push_back(0);
-        }
+        // else
+        // {
+        //     // Not a GEP — treat as access to base field (e.g., offset 0)
+        //     offsets.push_back(0);
+        // }
 
         addConstraint({Store, valNode->id, ptrNode->id, offsets});
     }
@@ -559,11 +620,11 @@ void PointerAnalysis::visitLoadInst(LoadInst &LI)
                     offsets.push_back(~0ULL); // Unknown index
             }
         }
-        else
-        {
-            // Not a GEP — fallback to base field offset
-            offsets.push_back(0);
-        }
+        // else
+        // {
+        //     // Not a GEP — fallback to base field offset
+        //     offsets.push_back(0);
+        // }
 
         addConstraint({Load, ptrNode->id, destNode->id, offsets});
     }
@@ -592,6 +653,7 @@ void PointerAnalysis::visitGetElementPtrInst(GetElementPtrInst &GEP)
                 offsets.push_back(~0ULL); // Unknown index, e.g., variable
         }
 
+        // For non-allocation base pointers, use the traditional offset constraint
         addConstraint({Offset, basePtrNode->id, gepNode->id, offsets});
     }
 }
@@ -1387,7 +1449,7 @@ bool PointerAnalysis::isTypeCompatible(Type *ptrType, Type *allocaType)
     if (ptrType->isPointerTy() && allocaType->isPointerTy())
         return true;
 
-    // if (DebugMode)
+    if (DebugMode)
     {
         errs() << "[TypeCheck] Incompatible types: ";
         ptrType->print(errs());
@@ -1402,9 +1464,7 @@ bool PointerAnalysis::isTypeCompatible(Type *ptrType, Type *allocaType)
 void PointerAnalysis::processAssignConstraint(const llvm::Constraint &constraint)
 {
     if (DebugMode)
-    {
         errs() << "Processing Assign constraint: " << constraint << "\n";
-    }
 
     bool changed = false;
     auto &dst = idToNodeMap[constraint.rhs_id];
@@ -1473,9 +1533,7 @@ void PointerAnalysis::processAssignConstraint(const llvm::Constraint &constraint
 void PointerAnalysis::processAddressOfConstraint(const llvm::Constraint &constraint)
 {
     if (DebugMode)
-    {
         errs() << "Processing AddressOf constraint: " << constraint << "\n";
-    }
 
     bool changed = false;
     auto &dst = idToNodeMap[constraint.rhs_id];
@@ -1503,37 +1561,52 @@ void PointerAnalysis::processAddressOfConstraint(const llvm::Constraint &constra
 void PointerAnalysis::processGEPConstraint(const llvm::Constraint &constraint)
 {
     if (DebugMode)
-    {
         errs() << "Processing GEP (Offset) constraint: " << constraint << "\n";
-    }
 
+    bool changed = false;
     // dst points to whatever src points to (field-sensitive GEP)
     // src is the base pointer, dst is the GEP result
     auto &src = idToNodeMap[constraint.lhs_id];
     auto &dst = idToNodeMap[constraint.rhs_id];
-    std::unordered_set<uint64_t> cmp = src->diff.empty() ? src->pts : src->diff;
-    for (auto obj_id : cmp)
-    {
-        Node *objNode = getNodebyID(obj_id);
-        if (!objNode)
-        {
-            continue; // Skip if target not found
-        }
-        Node *fieldPtrNode = getOrCreateNode(objNode->value, objNode->context, constraint.offsets);
-        if (!fieldPtrNode)
-            continue;
-        addConstraint({Assign, fieldPtrNode->id, dst->id});
+    // Create/get field-sensitive node for base with indices
+    Node *fieldNode = getOrCreateNode(src->value, src->context, constraint.offsets);
+    if (!fieldNode)
+        return; // Skip if node cannot be created
 
-        // --- Taint propagation: if base pointer is tainted, taint the GEP result ---
-        if (TaintingEnabled && TaintedNodeIDs.count(src->id))
-        {
-            if (DebugMode)
-                errs() << "-> Tainting node " << dst->id << " and " << fieldPtrNode->id << " from GEP base " << src->id << "\n";
+    // dst points to fieldNode (base + indices)
+    addConstraint({Assign, fieldNode->id, dst->id});
 
-            TaintedNodeIDs.insert(dst->id);
-            TaintedNodeIDs.insert(fieldPtrNode->id); // Also taint the field pointer node
-        }
+    if (TaintingEnabled && TaintedNodeIDs.count(constraint.lhs_id))
+    { // If the source node is tainted, mark the destination node as tainted
+        if (DebugMode)
+            llvm::errs() << "-> Tainting node " << constraint.rhs_id << " from GEP " << constraint.lhs_id << "\n";
+
+        TaintedNodeIDs.insert(constraint.rhs_id);
     }
+
+    // std::unordered_set<uint64_t> cmp = src->diff.empty() ? src->pts : src->diff;
+    // for (auto obj_id : cmp)
+    // {
+    //     Node *objNode = getNodebyID(obj_id);
+    //     if (!objNode)
+    //     {
+    //         continue; // Skip if target not found
+    //     }
+    //     Node *fieldPtrNode = getOrCreateNode(objNode->value, objNode->context, constraint.offsets);
+    //     if (!fieldPtrNode)
+    //         continue;
+    //     addConstraint({Assign, fieldPtrNode->id, dst->id});
+
+    //     // --- Taint propagation: if base pointer is tainted, taint the GEP result ---
+    //     if (TaintingEnabled && TaintedNodeIDs.count(src->id))
+    //     {
+    //         if (DebugMode)
+    //             errs() << "-> Tainting node " << dst->id << " and " << fieldPtrNode->id << " from GEP base " << src->id << "\n";
+
+    //         TaintedNodeIDs.insert(dst->id);
+    //         TaintedNodeIDs.insert(fieldPtrNode->id); // Also taint the field pointer node
+    //     }
+    // }
 }
 
 void PointerAnalysis::processLoadConstraint(const llvm::Constraint &constraint)
@@ -1547,14 +1620,13 @@ void PointerAnalysis::processLoadConstraint(const llvm::Constraint &constraint)
     auto &src = idToNodeMap[constraint.lhs_id];
     auto &dst = idToNodeMap[constraint.rhs_id];
     std::unordered_set<uint64_t> cmp = src->diff.empty() ? src->pts : src->diff;
+
     // src (offsets) -load-> dst
     for (auto obj_id : cmp)
     {
         Node *objNode = getNodebyID(obj_id);
         if (!objNode)
-        {
             continue; // Skip if target not found
-        }
         Node *fieldPtrNode = getOrCreateNode(objNode->value, objNode->context, constraint.offsets);
         if (!fieldPtrNode)
             continue; // Skip if node cannot be created
@@ -1581,12 +1653,13 @@ void PointerAnalysis::processStoreConstraint(const llvm::Constraint &constraint)
     auto &src = idToNodeMap[constraint.lhs_id];
     auto &dst = idToNodeMap[constraint.rhs_id];
     std::unordered_set<uint64_t> cmp = dst->diff.empty() ? dst->pts : dst->diff;
+
     // src -store-> dst (offsets)
     for (auto obj_id : cmp)
     {
         Node *objNode = getNodebyID(obj_id);
-        if (!objNode || !objNode->isAlloc()) // Ensure objNode is an AllocNode
-            continue;                        // Skip if target not found
+        if (!objNode)
+            continue; // Skip if target not found
         Node *fieldPtrNode = getOrCreateNode(objNode->value, objNode->context, constraint.offsets);
         if (!fieldPtrNode)
             continue; // Skip if node cannot be created
@@ -1870,12 +1943,14 @@ bool PointerAnalysis::parseOutputDir(Module &M)
         parseInputDir(M); // Ensure inputDir is set
     }
 
-    // Construct output.txt path
-    llvm::SmallString<256> outputPath(inputDir);
-    llvm::sys::path::append(outputPath, "output.txt");
-    outputFile = std::string(outputPath.c_str());
-    errs() << "Output file path: " << outputFile << "\n";
-
+    if (OutputToFile)
+    {
+        // Construct output.txt path
+        llvm::SmallString<256> outputPath(inputDir);
+        llvm::sys::path::append(outputPath, "output.txt");
+        outputFile = std::string(outputPath.c_str());
+        errs() << "Output file path: " << outputFile << "\n";
+    }
     return true;
 }
 
@@ -1891,7 +1966,8 @@ bool PointerAnalysis::parseTaintConfig(Module &M)
     llvm::SmallString<256> taintConfigPath(inputDir);
     llvm::sys::path::append(taintConfigPath, "taint_config.json");
     taintJsonFile = std::string(taintConfigPath.c_str());
-    errs() << "Taint config file path: " << taintJsonFile << "\n";
+    if (DebugMode)
+        errs() << "Taint config file path: " << taintJsonFile << "\n";
 
     // Check if the taint config file exists
     if (llvm::sys::fs::exists(taintJsonFile))
@@ -1984,7 +2060,7 @@ const void PointerAnalysis::printStatistics()
     // Print channel semantics statistics
     channelSemantics->printChannelInfo(errs());
 
-    errs() << "==================================\n";
+    errs() << "===============================\n";
 }
 
 // Iterate through the points-to map and print the results: full version
@@ -2044,35 +2120,41 @@ void PointerAnalysis::printTaintedNodes(std::ofstream &outFile)
         std::string s;
         llvm::raw_string_ostream rso(s);
         rso << *value;
-        rso.flush();
-        outFile << s << ", ";
+        outFile << s << "\n";
+    }
+}
 
-        if (auto *inst = llvm::dyn_cast<llvm::Instruction>(value))
-        {
-            llvm::Function *func = inst->getParent()->getParent();
-            if (func)
+const void PointerAnalysis::outputToFile()
+{
+    std::ofstream outFile(getOutputFileName()); // Open the output file
+    if (outFile.is_open())
+    {
+        errs() << "Writing pointer analysis results to " << getOutputFileName() << " ...\n";
+
+        if (DebugMode)
+        { // Print the names of visited functions
+            outFile << "Visited Functions:\n";
+            for (const auto *func : getVisitedFunctions())
             {
-                outFile << " (from function " << func->getName().str() << ")";
+                if (func)
+                {
+                    outFile << "  - " << func->getName().str() << "\n";
+                }
             }
         }
-        else if (auto *arg = llvm::dyn_cast<llvm::Argument>(value))
-        {
-            if (auto *func = arg->getParent())
-            {
-                outFile << " (arg of function " << func->getName().str() << ")";
-            }
-        }
-        else
-        {
-            outFile << " (no function context)";
-        }
-        outFile << "\n";
 
-        // // the following prints out the full information of the node
-        // std::string s;
-        // llvm::raw_string_ostream rso(s);
-        // rso << *node;
-        // rso.flush();
-        // outFile << s << "\n";
+        // Print the call graph to the file
+        getCallGraph().printCG(outFile);
+        // Iterate through the points-to map and print the results
+        printPointsToMap(outFile);
+
+        if (TaintingEnabled)
+            printTaintedNodes(outFile);
+
+        outFile.close(); // Close the file after writing
+    }
+    else
+    {
+        errs() << "Error: Could not open file for writing results.\n";
     }
 }

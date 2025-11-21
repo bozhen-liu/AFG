@@ -1,0 +1,5 @@
+{
+    "tagged_objects": [
+        "@sensitive_data = global [100 x i8] zeroinitializer"
+    ]
+}

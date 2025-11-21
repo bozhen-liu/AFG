@@ -214,7 +214,7 @@ namespace llvm
         const Node2EdgeSet &getGraph() const { return graph_; }
 
         // Get the number of nodes
-        size_t numNodes() const { return graph_.size(); }
+        size_t numNodes() const { return idToNodeMap.size(); }
 
         // Get the number of edges
         size_t numEdges() const
