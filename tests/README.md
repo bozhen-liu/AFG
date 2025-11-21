@@ -65,7 +65,7 @@ Ensure you have the following installed:
 
 ### Build Instructions
 
-1. **Build the main project first:**
+**Build the main project (this will build the tests together):**
 
    ```bash
    # From the AFG root directory
@@ -75,46 +75,27 @@ Ensure you have the following installed:
    make
    ```
 
-2. **Build the test framework:**
-
-   ```bash
-   # From the AFG root directory
-   cd tests
-   mkdir -p build
-   cd build
-   cmake ..
-   make
-   ```
-
-   The test framework has its own build system and will link against the main project's libraries.
 
 ### Running Tests
 
-From the `tests/build/` directory:
+From the `build/` directory:
 
 ```bash
 # Build tests first
-cd tests/build
+cd build
 make
 
 # Run all tests
-./afg_tests
+./build/tests/afg_tests
 
 # Run specific test categories
-./afg_tests --category pointer
-./afg_tests --category context
-./afg_tests --category taint
-./afg_tests --category channel
-./afg_tests --category integration
+./build/tests/afg_tests --category basic
+./build/tests/afg_tests --category context
+./build/tests/afg_tests --category taint
+./build/tests/afg_tests --category channel
+./build/tests/afg_tests --category integration
 
-# Alternative: Using CMake/CTest from main build directory
-cd ../../build
-ctest
-
-# Run specific test suites
-ctest -R pointer_analysis_tests
-ctest -R channel_analysis_tests
-```
+# Alternative: Using CMake/CTest from main build directory (TBD)
 
 ### Test Framework Features
 

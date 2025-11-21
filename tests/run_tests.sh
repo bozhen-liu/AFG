@@ -40,7 +40,7 @@ if [[ ! -f "../build/tests/afg_tests" ]]; then
 fi
 
 # Create necessary directories
-mkdir -p pointer context taint channel integration
+mkdir -p basic context taint channel integration
 
 echo -e "${BLUE}AFG Test Framework Runner${NC}"
 echo "=========================="
@@ -63,12 +63,12 @@ while [[ $# -gt 0 ]]; do
             echo "Usage: $0 [OPTIONS]"
             echo ""
             echo "Options:"
-            echo "  -c, --category CATEGORY  Run specific test category (pointer, context, taint, channel, integration, all)"
+            echo "  -c, --category CATEGORY  Run specific test category (basic, context, taint, channel, integration, all)"
             echo "  -v, --verbose           Enable verbose output"
             echo "  -h, --help              Show this help message"
             echo ""
             echo "Categories:"
-            echo "  pointer      Basic pointer analysis tests"
+            echo "  basic        Basic pointer analysis tests"
             echo "  context      Context-sensitive analysis tests"
             echo "  taint        Taint analysis tests"
             echo "  channel      Channel semantics tests"
@@ -77,7 +77,7 @@ while [[ $# -gt 0 ]]; do
             echo ""
             echo "Examples:"
             echo "  $0                           # Run all tests"
-            echo "  $0 -c pointer                # Run only pointer tests"
+            echo "  $0 -c basic                # Run only basic tests"
             echo "  $0 -c channel -v             # Run channel tests with verbose output"
             exit 0
             ;;
@@ -90,9 +90,9 @@ while [[ $# -gt 0 ]]; do
 done
 
 # Validate category
-if [[ ! "$CATEGORY" =~ ^(pointer|context|taint|channel|integration|all)$ ]]; then
+if [[ ! "$CATEGORY" =~ ^(basic|context|taint|channel|integration|all)$ ]]; then
     echo -e "${RED}Error: Invalid category '$CATEGORY'${NC}"
-    echo "Valid categories: pointer, context, taint, channel, integration, all"
+    echo "Valid categories: basic, context, taint, channel, integration, all"
     exit 1
 fi
 
@@ -121,7 +121,7 @@ fi
 if [[ "$CATEGORY" == "all" ]]; then
     echo ""
     echo -e "${BLUE}💡 Tip: You can run specific categories faster:${NC}"
-    echo "  ./run_tests.sh -c pointer    # Basic pointer analysis"
+    echo "  ./run_tests.sh -c basic    # Basic basic analysis"
     echo "  ./run_tests.sh -c channel    # Channel semantics (your implementation)"
     echo "  ./run_tests.sh -c taint      # Taint analysis"
     echo "  ./run_tests.sh -c context    # Context-sensitive analysis"

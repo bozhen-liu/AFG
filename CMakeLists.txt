@@ -22,7 +22,11 @@ add_library(PointerAnalysisCore STATIC
   src/ChannelSemantics.cpp
   src/OriginPointerAnalysis.cpp
   src/Flags.cpp
+  src/nodes/AllocNode.cpp
+  src/FieldSensitiveMemModel.cpp
 )
+set_target_properties(PointerAnalysisCore PROPERTIES POSITION_INDEPENDENT_CODE ON)
+target_include_directories(PointerAnalysisCore PUBLIC include)
 
 # Link core library against LLVM and nlohmann_json
 target_link_libraries(PointerAnalysisCore PUBLIC LLVM nlohmann_json::nlohmann_json)
@@ -34,6 +38,9 @@ add_library(PointerAnalysisPass MODULE
 
 # Link pass against core library
 target_link_libraries(PointerAnalysisPass PRIVATE PointerAnalysisCore)
+
+# Define the project source directory for use in code
+add_definitions(-DPROJECT_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
 
 # Add tests subdirectory
 add_subdirectory(tests)

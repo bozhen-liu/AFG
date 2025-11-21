@@ -5,7 +5,6 @@
 #include "llvm/IR/Instructions.h"
 #include "llvm/Support/raw_ostream.h"
 #include "CallGraph.h"
-#include "PointerAnalysis.h"
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
@@ -93,11 +92,11 @@ namespace llvm
     class ChannelSemantics
     {
     public:
-        ChannelSemantics(PointerAnalysis *analysis = nullptr)
-            : analysis(analysis) {}
+        ChannelSemantics(PointerAnalysis *pa = nullptr)
+            : analysis(pa) {}
 
         // Maps to track channel relationships
-        std::unordered_map<llvm::Node *, ChannelInfo *> channel2info; // Maps sender/receiver objects to channel info
+        std::unordered_map<llvm::Node *, ChannelInfo *> channel2info;                    // Maps sender/receiver objects to channel info
         std::unordered_map<llvm::Node *, ChannelOperation *> channel2DanglingOperations; // base node to unmatched operations, e.g., send/recv without info
 
         bool isChannelAlloc(llvm::AllocaInst &AI);
@@ -116,7 +115,7 @@ namespace llvm
         void printChannelInfo(llvm::raw_ostream &os);
 
     private:
-        PointerAnalysis *analysis = nullptr;                                             // Pointer analysis instance for this semantics
+        PointerAnalysis *analysis = nullptr; // Pointer analysis instance for this semantics
 
         // Helper functions to identify channel types and operations
         bool isChannelCreateCall(std::string demangledName);
